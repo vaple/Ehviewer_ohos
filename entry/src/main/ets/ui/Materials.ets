@@ -67,3 +67,19 @@ export const ACTION_BAR_MARGIN: number = 12;
  * 用固定挡位贴合内容；`SheetSize.FIT_CONTENT` 在真机上仍按默认 60% 渲染，会留一大片空白。
  */
 export const JUMP_SHEET_H: number = 380;
+/**
+ * 阅读选项半模态高度（vp）。内容只有「方向」段控件 + 两个开关行（约 200vp），
+ * 默认挡位（LARGE）会拉成近全屏。同 `JUMP_SHEET_H`：`FIT_CONTENT` 真机不生效，只能给固定挡位。
+ */
+export const READER_SHEET_H: number = 260;
+
+/**
+ * 评论分数色：正分品牌色、负分危险色，`0` / 无分数沿用次级文字色。
+ * `+5` / `-3` 的符号已经把含义说清，颜色只做扫读加速，不引入第三套语义色。
+ */
+export function commentScoreColor(score: number | undefined): ResourceColor {
+  if (score === undefined || score === 0) {
+    return $r('app.color.text_secondary');
+  }
+  return score > 0 ? $r('app.color.brand') : $r('app.color.danger');
+}

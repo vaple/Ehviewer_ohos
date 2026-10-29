@@ -38,7 +38,8 @@ import { CATEGORY_UNKNOWN, languageOf } from '../parser/ParserUtils';
 import { tagQueryOf, GalleryDetailParser } from '../parser/GalleryDetailParser';
 import { errorText } from '../common/ErrorText';
 import { catColor, catLabel } from './CategoryStyle';
-import { CARD_RADIUS, ACTION_BAR_BTN_H, ACTION_BAR_H, ACTION_BAR_MARGIN, HDS_MATERIAL, JUMP_SHEET_H, PAGE_PADDING, SHEET_MATERIAL, THUMB_RADIUS, TOUCH_MIN } from './Materials';
+import { CARD_RADIUS, ACTION_BAR_BTN_H, ACTION_BAR_H, ACTION_BAR_MARGIN, HDS_MATERIAL, JUMP_SHEET_H, PAGE_PADDING, SHEET_MATERIAL, THUMB_RADIUS, TOUCH_MIN, commentScoreColor } from './Materials';
+import { commentDateText, commentScoreText } from '../common/CommentText';
 import { galleryGeometryId } from './GalleryRow';
 import { SkeletonBlock } from './Skeleton';
 import { TITLE_BAR_H } from './NavStyle';
@@ -1253,11 +1254,15 @@ export struct GalleryDetailPage {
             Repeat(this.comments.slice(0, 3))
               .each((ri: RepeatItem<GalleryComment>) => {
                 Column({ space: 2 }) {
-                  Text(`${ri.item.user} · ${ri.item.time}` +
-                    (ri.item.score !== undefined ? ` · ${ri.item.score} 分` : ''))
-                    .fontSize(12)
-                    .fontColor($r('app.color.text_secondary'))
-                    .width('100%')
+                  // 分数只染数字：整行染色会让长用户名也跟着变色，读起来反而更乱。
+                  Text() {
+                    Span(`${ri.item.user} · ${commentDateText(ri.item.time)}`)
+                      .fontColor($r('app.color.text_secondary'))
+                    Span(ri.item.score !== undefined ? ` · ${commentScoreText(ri.item.score)}` : '')
+                      .fontColor(commentScoreColor(ri.item.score))
+                  }
+                  .fontSize(12)
+                  .width('100%')
                   Text(ri.item.text)
                     .fontSize(13)
                     .fontColor($r('app.color.text_primary'))

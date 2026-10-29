@@ -13,7 +13,8 @@ import { Logger } from '../common/Logger';
 import { GalleryDetailParser } from '../parser/GalleryDetailParser';
 import { AppSettings } from '../state/AppSettings';
 import { WindowState } from '../state/WindowState';
-import { CARD_GAP, CARD_RADIUS, PAGE_PADDING } from './Materials';
+import { CARD_GAP, CARD_RADIUS, PAGE_PADDING, commentScoreColor } from './Materials';
+import { commentDateText, commentScoreText } from '../common/CommentText';
 import { navTitleBarStyle, TITLE_BAR_H } from './NavStyle';
 
 /**
@@ -120,11 +121,15 @@ export struct CommentsPage {
               .each((ri: RepeatItem<GalleryComment>) => {
                 ListItem() {
                   Column({ space: 2 }) {
-                    Text(`${ri.item.user} · ${ri.item.time}` +
-                      (ri.item.score !== undefined ? ` · ${ri.item.score} 分` : ''))
-                      .fontSize(12)
-                      .fontColor($r('app.color.text_secondary'))
-                      .width('100%')
+                    // 分数只染数字（正分品牌色 / 负分危险色），整行染色会盖掉用户名的次级灰。
+                    Text() {
+                      Span(`${ri.item.user} · ${commentDateText(ri.item.time)}`)
+                        .fontColor($r('app.color.text_secondary'))
+                      Span(ri.item.score !== undefined ? ` · ${commentScoreText(ri.item.score)}` : '')
+                        .fontColor(commentScoreColor(ri.item.score))
+                    }
+                    .fontSize(12)
+                    .width('100%')
                     Text(ri.item.text)
                       .fontSize(13)
                       .fontColor($r('app.color.text_primary'))

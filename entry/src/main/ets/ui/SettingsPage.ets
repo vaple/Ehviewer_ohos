@@ -413,6 +413,27 @@ export struct SettingsPage {
     this.openSitePage(`${EhUrl.host(this.settings.site)}home.php`, '登录后修改站点设置');
   }
 
+  /**
+   * 返回链：Web 站内能回退就先回退（与浏览器一致），退不动再关浮层回到设置页。
+   * 浮层不是独立页面，所以必须自己接管返回；否则标题栏 ← / 系统手势会直接把设置页弹掉。
+   * 返回 `true` 表示已消费，`false` 交回默认的页面 pop。
+   */
+  private handleBack(): boolean {
+    if (!this.showWeb && this.sitePageUrl.length === 0) {
+      return false;
+    }
+    if (this.controller.accessBackward()) {
+      this.controller.backward();
+      return true;
+    }
+    if (this.sitePageUrl.length > 0) {
+      this.closeSitePage();
+    } else {
+      this.showWeb = false;
+    }
+    return true;
+  }
+
   /** 关站端页：把 Web 侧可能更新的 Cookie（含 `uconfig`）写回 App。 */
   private async closeSitePage(): Promise<void> {
     try {
@@ -512,9 +533,6 @@ export struct SettingsPage {
     HdsNavDestination() {
       if (this.showWeb) {
         Column() {
-          Row() {
-            Button('返回').fontSize(14).onClick(() => { this.showWeb = false; })
-          }.width('100%').padding(8)
           Web({ src: LOGIN_URL, controller: this.controller })
             .width('100%')
             .layoutWeight(1)
@@ -525,9 +543,6 @@ export struct SettingsPage {
         .padding({ top: this.windowState.safeTop + TITLE_BAR_H })
       } else if (this.sitePageUrl.length > 0) {
         Column() {
-          Row() {
-            Button('返回').fontSize(14).onClick(() => { this.closeSitePage(); })
-          }.width('100%').padding(8)
           Web({ src: this.sitePageUrl, controller: this.controller })
             .width('100%')
             .layoutWeight(1)
@@ -760,6 +775,7 @@ export struct SettingsPage {
     }
     .titleBar({ avoidLayoutSafeArea: true, style: navTitleBarStyle(), content: { title: { mainTitle: '设置' } } })
     .bindToScrollable([this.scroller])
+    .onBackPressed(() => this.handleBack())
     .bindSheet($$this.sheetOpen, this.sheetContent(), {
       title: { title: this.sheetKind === 1 ? '导入 Cookie' : '诊断日志' },
       systemMaterial: SHEET_MATERIAL,

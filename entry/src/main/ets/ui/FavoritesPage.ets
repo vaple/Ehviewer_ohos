@@ -608,6 +608,8 @@ export struct FavoritesPage {
       // 移动收藏夹：官方半模态 + 系统材质（原自绘遮罩浮层已删）。
       .bindSheet(this.moveGid >= 0 || this.batchMove, this.catSheet(), {
         title: { title: '移动到收藏夹' },
+        // 内容是 List（无固有高度，`FIT_CONTENT` 量不出来）：半屏起步，可上拖到全屏。
+        detents: [SheetSize.MEDIUM, SheetSize.LARGE],
         systemMaterial: SHEET_MATERIAL,
         onDisappear: () => {
           this.moveGid = -1;

@@ -1,6 +1,7 @@
 ﻿import appErrorTest from './common/AppError.test';
 import redactTest from './common/Redact.test';
 import errorTextTest from './common/ErrorText.test';
+import commentTextTest from './common/CommentText.test';
 import logFormatTest from './service/LogFormat.test';
 import logRetentionTest from './service/LogRetention.test';
 import diagLogTest from './service/DiagLog.test';
@@ -44,6 +45,7 @@ export default function testsuite() {
   appErrorTest();
   redactTest();
   errorTextTest();
+  commentTextTest();
   logFormatTest();
   logRetentionTest();
   diagLogTest();

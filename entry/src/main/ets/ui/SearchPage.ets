@@ -1009,6 +1009,8 @@ export struct SearchPage {
     .dynamicHideTitleBar({ hideTitleArea: true, hideBottomBuilder: true, mode: HideMode.SCROLL_UP })
     .bindSheet($$this.showQuickSearch, this.quickSearchSheet(), {
       title: { title: '快速搜索' },
+      // 内容是 List（无固有高度，`FIT_CONTENT` 量不出来）：半屏起步，可上拖到全屏。
+      detents: [SheetSize.MEDIUM, SheetSize.LARGE],
       systemMaterial: SHEET_MATERIAL
     })
     .onAppear(() => {
