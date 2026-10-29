@@ -7,7 +7,7 @@ HarmonyOS NEXT 移植。与 E-Hentai / ExHentai 官方无关：只提供客户�
 不托管、不存储、不分发任何站点内容。
 
 - 包名：`io.github.vaple.ehviewer`
-- 目标平台：HarmonyOS NEXT（API 26 / HarmonyOS 6.0）
+- 目标平台：HarmonyOS 7.0（API 26）
 
 ## 功能
 
@@ -35,14 +35,14 @@ HarmonyOS NEXT 移植。与 E-Hentai / ExHentai 官方无关：只提供客户�
 
 1. 下载 hap 与 sha256，先校验文件完整性
 2. 用你自己的调试证书为它签名（HapKit、小白调试助手等自签工具都可以）
-3. 签名后安装到已开启开发者模式的设备
+3. 签名后安装到已开启开发者模式的设备（需要 HarmonyOS 7.0 / API 26 及以上）
 
 未签名 hap 无法直接安装（会报 `9568320 no signature file`）。
 签名证书与设备绑定，别人签好的包在你机器上装不上，所以本项目只分发未签名包。
 
 ## 从源码构建
 
-需要 DevEco Studio（支持 API 26 / HarmonyOS 6.0）。
+需要支持 API 26（HarmonyOS 7.0）的 DevEco Studio。
 
 1. 用 DevEco Studio 打开工程根目录
 2. File → Project Structure → Signing Configs → 勾选 **Automatically generate signature**
