@@ -1,0 +1,44 @@
+{
+  app: {
+    // 开源仓库里只保留空数组：签名配置由 DevEco「Project Structure → Signing Configs → 自动签名」
+    // 写入本地工作区，请勿提交（.githooks/pre-commit 会拦下带口令的提交）。
+    signingConfigs: [],
+    products: [
+      {
+        name: 'default',
+        signingConfig: 'default',
+        targetSdkVersion: '26.0.0',
+        compatibleSdkVersion: '26.0.0',
+        runtimeOS: 'HarmonyOS',
+        buildOption: {
+          strictMode: {
+            caseSensitiveCheck: true,
+            useNormalizedOHMUrl: true,
+          },
+        },
+      },
+    ],
+    buildModeSet: [
+      {
+        name: 'debug',
+      },
+      {
+        name: 'release',
+      },
+    ],
+  },
+  modules: [
+    {
+      name: 'entry',
+      srcPath: './entry',
+      targets: [
+        {
+          name: 'default',
+          applyToProducts: [
+            'default',
+          ],
+        },
+      ],
+    },
+  ],
+}

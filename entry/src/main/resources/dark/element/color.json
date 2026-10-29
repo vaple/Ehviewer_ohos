@@ -1,0 +1,120 @@
+{
+  "color": [
+    {
+      "name": "bg_primary",
+      "value": "#101010"
+    },
+    {
+      "name": "bg_secondary",
+      "value": "#212224"
+    },
+    {
+      "name": "reader_bg",
+      "value": "#000000"
+    },
+    {
+      "name": "text_primary",
+      "value": "#EDEDED"
+    },
+    {
+      "name": "text_secondary",
+      "value": "#A0A0A0"
+    },
+    {
+      "name": "brand",
+      "value": "#6E93F0"
+    },
+    {
+      "name": "chip_active_bg",
+      "value": "#336E93F0"
+    },
+    {
+      "name": "chip_active_text",
+      "value": "#A8C0F7"
+    },
+    {
+      "name": "chip_danger_bg",
+      "value": "#33F28B82"
+    },
+    {
+      "name": "divider",
+      "value": "#2E2E2E"
+    },
+    {
+      "name": "danger",
+      "value": "#F28B82"
+    },
+    {
+      "name": "cat_misc",
+      "value": "#F06292"
+    },
+    {
+      "name": "cat_doujinshi",
+      "value": "#F44336"
+    },
+    {
+      "name": "cat_manga",
+      "value": "#FF9800"
+    },
+    {
+      "name": "cat_artist_cg",
+      "value": "#FBC02D"
+    },
+    {
+      "name": "cat_game_cg",
+      "value": "#4CAF50"
+    },
+    {
+      "name": "cat_image_set",
+      "value": "#3F51B5"
+    },
+    {
+      "name": "cat_cosplay",
+      "value": "#9C27B0"
+    },
+    {
+      "name": "cat_asian_porn",
+      "value": "#9575CD"
+    },
+    {
+      "name": "cat_non_h",
+      "value": "#2196F3"
+    },
+    {
+      "name": "cat_western",
+      "value": "#8BC34A"
+    },
+    {
+      "name": "reader_chrome",
+      "value": "#000000"
+    },
+    {
+      "name": "reader_chrome_clear",
+      "value": "#00000000"
+    },
+    {
+      "name": "reader_btn_bg",
+      "value": "#212121"
+    },
+    {
+      "name": "reader_btn_ring",
+      "value": "#3D3D3D"
+    },
+    {
+      "name": "skeleton_bg",
+      "value": "#2A2B2D"
+    },
+    {
+      "name": "skeleton_highlight",
+      "value": "#1FFFFFFF"
+    },
+    {
+      "name": "skeleton_highlight_transparent",
+      "value": "#00FFFFFF"
+    },
+    {
+      "name": "start_window_background",
+      "value": "#101010"
+    }
+  ]
+}

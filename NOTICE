@@ -1,0 +1,9 @@
+EhViewer for HarmonyOS NEXT
+Copyright 2026 vaple
+
+This product includes software derived from EhViewer
+Copyright (C) 2014-2019 Hippo Seven
+Licensed under the Apache License, Version 2.0.
+
+Third-party dependencies are listed in oh-package.json5 files and are
+distributed under their own licenses (see each package's LICENSE).

@@ -1,0 +1,101 @@
+name: Bug 报告
+description: 报告一个可复现的问题
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。请尽量把下面的信息填完——这个项目的排障很依赖设备型号、系统版本和诊断日志。
+
+        **提问前请先确认**：
+        - 问题不是「未签名 hap 装不上」（那是预期行为，见 README）
+        - 已尝试清除应用数据 / 重启 App
+
+  - type: input
+    id: device
+    attributes:
+      label: 设备型号
+      placeholder: 例如 Mate 80 Pro Max / Mate X7（模拟器请注明）
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: HarmonyOS 版本
+      placeholder: 设置 → 关于本机 → 版本号
+    validations:
+      required: true
+
+  - type: input
+    id: app_version
+    attributes:
+      label: App 版本
+      placeholder: 我的 → 关于 里显示的版本号；从源码构建的请写 commit
+    validations:
+      required: true
+
+  - type: dropdown
+    id: site
+    attributes:
+      label: 站点
+      options:
+        - ExHentai
+        - E-Hentai
+        - 两个都有
+        - 与站点无关
+    validations:
+      required: true
+
+  - type: dropdown
+    id: login
+    attributes:
+      label: 登录状态
+      options:
+        - 已登录
+        - 未登录
+        - 不确定
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开 …
+        2. 点击 …
+        3. 看到 …
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+      placeholder: 有报错文案请原样粘贴（错误文案是站点原文透传的，不要改写）
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 诊断日志
+      description: |
+        「设置 → 关于 → 诊断日志 → 分享」导出的 zip，直接拖进来（日志已脱敏，不含 Cookie）。
+        如果分享失败，贴「最近崩溃」里显示的内容也可以。
+      placeholder: 拖入 zip 或粘贴关键日志行
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 其他
+      description: 截图、录屏、补充说明

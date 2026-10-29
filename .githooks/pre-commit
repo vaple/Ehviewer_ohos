@@ -1,0 +1,33 @@
+#!/bin/sh
+# 提交前守卫：本仓库准备开源，签名口令与本机笔记绝不能进版本库。
+# 启用：git config core.hooksPath .githooks   （已在开发机设置；新克隆请各自执行一次）
+# 详见 README「从源码构建」。
+
+staged() {
+  git diff --cached --name-only | grep -qx "$1"
+}
+
+fail=0
+
+# 1) 工程级 build-profile.json5：仓库里只保留空 signingConfigs（各人用 DevEco 自动签名本地保存）
+if staged 'build-profile.json5'; then
+  if git show :build-profile.json5 | grep -Eq '"(keyPassword|storePassword)"|keyPassword:|storePassword:'; then
+    echo "pre-commit: build-profile.json5 里带着签名口令，禁止提交。" >&2
+    echo "  仓库只保留空 signingConfigs；本地签名由 DevEco 生成、留在工作区不要 add。" >&2
+    fail=1
+  fi
+fi
+
+# 2) 本机笔记 / 凭据（.gitignore 已排除，这里防 git add -f）
+for f in AGENTS.md .secrets/credentials.md; do
+  if staged "$f"; then
+    echo "pre-commit: $f 属于本机文件，禁止提交。" >&2
+    fail=1
+  fi
+done
+
+if [ "$fail" -ne 0 ]; then
+  echo "  确实要提交请用 git commit --no-verify（不推荐）。" >&2
+  exit 1
+fi
+exit 0

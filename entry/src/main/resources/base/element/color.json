@@ -1,0 +1,119 @@
+{
+  "color": [
+    {
+      "name": "bg_primary",
+      "value": "#F1F3F5"
+    },
+    {
+      "name": "bg_secondary",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "reader_bg",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "text_primary",
+      "value": "#191919"
+    },
+    {
+      "name": "text_secondary",
+      "value": "#8C8C8C"
+    },
+    {
+      "name": "brand",
+      "value": "#3D6BE5"
+    },
+    {
+      "name": "chip_active_bg",
+      "value": "#1A3D6BE5"
+    },
+    {
+      "name": "chip_active_text",
+      "value": "#3D6BE5"
+    },
+    {
+      "name": "chip_danger_bg",
+      "value": "#1AD93025"
+    },
+    {
+      "name": "divider",
+      "value": "#E5E5E5"
+    },
+    {
+      "name": "danger",
+      "value": "#D93025"
+    },
+    {
+      "name": "cat_misc",
+      "value": "#F06292"
+    },
+    {
+      "name": "cat_doujinshi",
+      "value": "#F44336"
+    },
+    {
+      "name": "cat_manga",
+      "value": "#FF9800"
+    },
+    {
+      "name": "cat_artist_cg",
+      "value": "#FBC02D"
+    },
+    {
+      "name": "cat_game_cg",
+      "value": "#4CAF50"
+    },
+    {
+      "name": "cat_image_set",
+      "value": "#3F51B5"
+    },
+    {
+      "name": "cat_cosplay",
+      "value": "#9C27B0"
+    },
+    {
+      "name": "cat_asian_porn",
+      "value": "#9575CD"
+    },
+    {
+      "name": "cat_non_h",
+      "value": "#2196F3"
+    },
+    {
+      "name": "cat_western",
+      "value": "#8BC34A"
+    },
+    {
+      "name": "reader_chrome",
+      "value": "#FFFFFF"
+    },
+    {
+      "name": "reader_chrome_clear",
+      "value": "#00FFFFFF"
+    },
+    {
+      "name": "reader_btn_bg",
+      "value": "#14000000"
+    },
+    {
+      "name": "reader_btn_ring",
+      "value": "#22000000"
+    },
+    {
+      "name": "skeleton_bg",
+      "value": "#E4E6E8"
+    },    {
+      "name": "skeleton_highlight",
+      "value": "#B3FFFFFF"
+    },
+    {
+      "name": "skeleton_highlight_transparent",
+      "value": "#00FFFFFF"
+    },
+    {
+      "name": "start_window_background",
+      "value": "#F1F3F5"
+    }
+  ]
+}

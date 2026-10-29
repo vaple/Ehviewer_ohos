@@ -1,0 +1,16 @@
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.hap binary
+*.har binary
+*.hsp binary
+*.p12 binary
+*.p7b binary
+*.cer binary
+
+# 真实站点 HTML 快照只用于解析器单测，不计入 GitHub 语言统计
+entry/src/test/fixtures/** -linguist-detectable

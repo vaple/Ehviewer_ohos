@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "EhViewer main module"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "EhViewer"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "EhViewer"
+    }
+  ]
+}

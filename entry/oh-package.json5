@@ -1,0 +1,13 @@
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "EhViewer entry module.",
+  "main": "",
+  "author": "vaple",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@ohos/htmlparser2": "^1.0.4"
+  },
+  "devDependencies": {},
+  "dynamicDependencies": {}
+}
