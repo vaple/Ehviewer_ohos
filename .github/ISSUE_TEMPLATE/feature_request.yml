@@ -1,0 +1,52 @@
+name: 功能请求
+description: 想要某个功能，或者希望改掉某个限制
+title: "[Request] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        功能请求会被记录，但**不保证排期**（个人项目）。
+
+        如果想自己实现：直接 fork 自行维护即可，本项目是 Apache-2.0。本仓库暂不接受 PR。
+
+  - type: textarea
+    id: scenario
+    attributes:
+      label: 使用场景
+      description: 你现在是怎么做的、卡在哪一步。有具体操作路径最好。
+      placeholder: |
+        例如：在阅读器里翻到很后面时，想……
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望的行为
+      description: 你希望它变成什么样，越具体越好。
+    validations:
+      required: true
+
+  - type: input
+    id: reference
+    attributes:
+      label: 参考实现
+      description: 别的 App 或源工程里有类似功能吗？有的话把名字或截图放这里。
+
+  - type: dropdown
+    id: willing
+    attributes:
+      label: 是否愿意自行实现
+      options:
+        - 只提需求
+        - 可以尝试，需要指引
+        - 已经在自己的 fork 里做好了
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 其他
+      description: 截图、录屏、补充说明
