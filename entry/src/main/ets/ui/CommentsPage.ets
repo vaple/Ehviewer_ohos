@@ -13,7 +13,7 @@ import { Logger } from '../common/Logger';
 import { GalleryDetailParser } from '../parser/GalleryDetailParser';
 import { AppSettings } from '../state/AppSettings';
 import { WindowState } from '../state/WindowState';
-import { CARD_GAP, CARD_RADIUS, PAGE_PADDING, commentScoreColor } from './Materials';
+import { CARD_GAP, CARD_RADIUS, COMMENT_BAR_H, COMMENT_BAR_MARGIN, PAGE_PADDING, TOUCH_MIN, commentScoreColor } from './Materials';
 import { commentDateText, commentScoreText } from '../common/CommentText';
 import { navTitleBarStyle, TITLE_BAR_H } from './NavStyle';
 
@@ -103,80 +103,118 @@ export struct CommentsPage {
 
   build() {
     HdsNavDestination() {
-      Column() {
-        if (this.comments.length === 0 && this.message === '') {
-          Text('暂无评论')
-            .fontSize(12)
-            .fontColor($r('app.color.text_secondary'))
-            .width('100%')
-            .padding(PAGE_PADDING)
-        } else {
-          List({ space: CARD_GAP, scroller: this.scroller }) {
-            // 顶部避让放进滚动内容（顶部渐变才有效果）。
-            ListItem() {
-              Column().height(this.windowState.safeTop + TITLE_BAR_H)
-            }
-            Repeat(this.comments)
-              .virtualScroll({ reusable: false })
-              .each((ri: RepeatItem<GalleryComment>) => {
-                ListItem() {
-                  Column({ space: 2 }) {
-                    // 分数只染数字（正分品牌色 / 负分危险色），整行染色会盖掉用户名的次级灰。
-                    Text() {
-                      Span(`${ri.item.user} · ${commentDateText(ri.item.time)}`)
-                        .fontColor($r('app.color.text_secondary'))
-                      Span(ri.item.score !== undefined ? ` · ${commentScoreText(ri.item.score)}` : '')
-                        .fontColor(commentScoreColor(ri.item.score))
-                    }
-                    .fontSize(12)
-                    .width('100%')
-                    Text(ri.item.text)
-                      .fontSize(13)
-                      .fontColor($r('app.color.text_primary'))
+      // 内容层铺满 + 输入胶囊浮在底部：模糊要透出背后滚动的评论，两者必须重叠（同详情页动作条）。
+      // 输入层只占自身高度——「铺满 + hitTestBehavior(None)」会让 Blank 吞掉列表手势（ui/AGENTS #21）。
+      Stack({ alignContent: Alignment.Bottom }) {
+        Column() {
+          if (this.comments.length === 0 && this.message === '') {
+            Text('暂无评论')
+              .fontSize(12)
+              .fontColor($r('app.color.text_secondary'))
+              .width('100%')
+              .padding(PAGE_PADDING)
+          } else {
+            List({ space: CARD_GAP, scroller: this.scroller }) {
+              // 顶部避让放进滚动内容（顶部渐变才有效果）。
+              ListItem() {
+                Column().height(this.windowState.safeTop + TITLE_BAR_H)
+              }
+              Repeat(this.comments)
+                .virtualScroll({ reusable: false })
+                .each((ri: RepeatItem<GalleryComment>) => {
+                  ListItem() {
+                    Column({ space: 2 }) {
+                      // 分数只染数字（正分品牌色 / 负分危险色），整行染色会盖掉用户名的次级灰。
+                      Text() {
+                        Span(`${ri.item.user} · ${commentDateText(ri.item.time)}`)
+                          .fontColor($r('app.color.text_secondary'))
+                        Span(ri.item.score !== undefined ? ` · ${commentScoreText(ri.item.score)}` : '')
+                          .fontColor(commentScoreColor(ri.item.score))
+                      }
+                      .fontSize(12)
                       .width('100%')
+                      Text(ri.item.text)
+                        .fontSize(13)
+                        .fontColor($r('app.color.text_primary'))
+                        .width('100%')
+                    }
+                    .width('100%')
+                    .padding(12)
+                    // 每条评论一张卡（与全应用卡片形态一致）。
+                    .backgroundColor($r('app.color.bg_secondary'))
+                    .borderRadius(CARD_RADIUS)
                   }
-                  .width('100%')
-                  .padding(12)
-                  // 每条评论一张卡（与全应用卡片形态一致）。
-                  .backgroundColor($r('app.color.bg_secondary'))
-                  .borderRadius(CARD_RADIUS)
-                }
-                .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
-              })
-              .key((comment: GalleryComment) => `${comment.id}`)
-          }
-          .width('100%')
-          .layoutWeight(1)
-          .contentStartOffset(12)
-          .contentEndOffset(12)
-        }
-        Row({ space: 8 }) {
-          TextInput({ placeholder: '写下你的评论', text: this.draft })
+                  .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+                })
+                .key((comment: GalleryComment) => `${comment.id}`)
+            }
+            .width('100%')
             .layoutWeight(1)
-            .onChange((value: string) => {
-              this.draft = value;
-            })
-            .enabled(!this.commentBusy)
-          Button(this.commentBusy ? '发送中…' : '发送')
-            .enabled(!this.commentBusy)
+            .contentStartOffset(12)
+            // 末尾留出胶囊占位：最后一条评论能滚到胶囊上方，不被压住。
+            .contentEndOffset(this.windowState.safeBottom + COMMENT_BAR_MARGIN + COMMENT_BAR_H + 12)
+          }
+        }
+        .width('100%')
+        .height('100%')
+
+        Column({ space: 8 }) {
+          if (this.message.length > 0) {
+            // 错误/提示浮在胶囊上方：自带模糊底，压在评论上也能读。
+            Text(this.message)
+              .fontSize(12)
+              .fontColor($r('app.color.text_secondary'))
+              .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+              .borderRadius(16)
+              .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
+          }
+          Row({ space: 6 }) {
+            TextInput({ placeholder: '写下你的评论', text: this.draft })
+              .layoutWeight(1)
+              .height(COMMENT_BAR_H - 8)
+              // 输入框自带填充底：不清掉会把胶囊的模糊整块盖死（与 sheet 材质同一个坑）。
+              .backgroundColor(Color.Transparent)
+              .placeholderColor($r('app.color.text_secondary'))
+              .onChange((value: string) => {
+                this.draft = value;
+              })
+              .enabled(!this.commentBusy)
+            // 发送：语义图标（§7 图标优先于裸中文按钮）；发送中换进度圈，重复点击由 `sendComment` 单飞守卫。
+            Stack() {
+              if (this.commentBusy) {
+                LoadingProgress().width(20).height(20).color(Color.White)
+              } else {
+                SymbolGlyph($r('sys.symbol.paperplane_fill'))
+                  .fontSize(18)
+                  .fontColor([Color.White])
+              }
+            }
+            .width(TOUCH_MIN)
+            .height(TOUCH_MIN)
+            .borderRadius(TOUCH_MIN / 2)
+            .backgroundColor($r('app.color.brand'))
+            .accessibilityText(this.commentBusy ? '发送中' : '发送')
             .onClick(() => {
               this.sendComment();
             })
+          }
+          .width('100%')
+          .height(COMMENT_BAR_H)
+          .padding({ left: 16, right: 4 })
+          .borderRadius(COMMENT_BAR_H / 2)
+          // 只挂官方模糊、不铺不透明底色（铺了就把模糊盖成实心白条，和 sheet 材质同理）。
+          .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
         }
         .width('100%')
-        .padding({ left: PAGE_PADDING, right: PAGE_PADDING, top: 8, bottom: 4 })
-        if (this.message.length > 0) {
-          Text(this.message)
-            .fontSize(12)
-            .fontColor($r('app.color.text_secondary'))
-            .padding(6)
-        }
+        .padding({
+          left: PAGE_PADDING,
+          right: PAGE_PADDING,
+          bottom: this.windowState.safeBottom + COMMENT_BAR_MARGIN
+        })
       }
       .width('100%')
       .height('100%')
       .backgroundColor($r('app.color.bg_primary'))
-      // 沉浸式布局下内容会铺到手势条后面：底部整体避让安全区，输入框不压小白条。
-      .padding({ bottom: this.windowState.safeBottom })
       .onAppear(() => {
         if (this.comments.length === 0) {
           this.load();
