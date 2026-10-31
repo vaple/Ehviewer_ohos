@@ -13,6 +13,8 @@ import requestLogTest from './network/RequestLog.test';
 import ehUrlTest from './network/EhUrl.test';
 import httpErrorMappingTest from './network/HttpErrorMapping.test';
 import ehApiTest from './network/EhApi.test';
+import detailCacheTest from './network/DetailCache.test';
+import ehClientCacheTest from './network/EhClientCache.test';
 import htmlTest from './parser/Html.test';
 import ehErrorDetectorTest from './parser/EhErrorDetector.test';
 import galleryListParserTest from './parser/GalleryListParser.test';
@@ -58,6 +60,8 @@ export default function testsuite() {
   ehUrlTest();
   httpErrorMappingTest();
   ehApiTest();
+  detailCacheTest();
+  ehClientCacheTest();
   htmlTest();
   ehErrorDetectorTest();
   galleryListParserTest();

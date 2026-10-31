@@ -4,6 +4,7 @@ import { UIAbility, common } from '@kit.AbilityKit';
 import { RcpHttpClient } from '../../../main/ets/network/RcpHttpClient';
 import { CookieStore } from '../../../main/ets/network/CookieStore';
 import { EhClient } from '../../../main/ets/network/EhClient';
+import { DetailCache } from '../../../main/ets/network/DetailCache';
 import { EhSite, EhUrl } from '../../../main/ets/network/EhUrl';
 import { GalleryInfo } from '../../../main/ets/model/GalleryInfo';
 import { GalleryDetail } from '../../../main/ets/model/GalleryDetail';
@@ -18,7 +19,7 @@ export default function ehClientDetailTest() {
     it('fetch_list_then_detail', 0, async () => {
       const cookies: CookieStore = new CookieStore();
       await cookies.init(await ctx());
-      const client: EhClient = new EhClient(new RcpHttpClient(), cookies);
+      const client: EhClient = new EhClient(new RcpHttpClient(), cookies, new DetailCache(25, 0));
 
       const list: GalleryInfo[] = await client.getGalleryList(EhSite.E, EhUrl.frontPage(EhSite.E));
       expect(list.length > 0).assertTrue();

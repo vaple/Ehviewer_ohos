@@ -306,7 +306,7 @@ export struct ReaderPage {
       await this.store.init(this.context());
 
       const detail: GalleryDetail | null =
-        await client.getGalleryDetail(this.site, this.gid, this.token);
+        await client.getGalleryDetail(this.site, this.gid, this.token, this.settings.thumbSize);
       if (detail === null) {
         Logger.error('Reader', `getGalleryDetail returned null gid=${this.gid}`);
         this.ready = true;

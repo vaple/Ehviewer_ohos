@@ -1,11 +1,12 @@
 import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
+import { CookieJar } from './CookieJar';
 
 const PREF_NAME: string = 'eh_cookies';
 const KEY: string = 'cookies';
 
 /** Cookie 存储：内存缓存 + `@ohos.data.preferences` 持久化。 */
-export class CookieStore {
+export class CookieStore implements CookieJar {
   private cookies: Map<string, string> = new Map<string, string>();
   private store: preferences.Preferences | undefined = undefined;
 

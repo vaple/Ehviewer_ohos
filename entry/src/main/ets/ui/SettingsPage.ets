@@ -25,6 +25,7 @@ import { clampPrefetch, PREFETCH_MAX, PREFETCH_MIN } from '../reader/PrefetchPla
 import { navTitleBarStyle } from './NavStyle';
 import { UpdateState, hasUpdate, updateState, updateSummary } from '../state/UpdateState';
 import { DownloadStart, UpdateManager } from '../service/UpdateManager';
+import { sharedDetailCache } from '../network/DetailCache';
 
 const LOGIN_URL: string = 'https://forums.e-hentai.org/index.php?act=Login';
 
@@ -147,6 +148,8 @@ export struct SettingsPage {
       store.set('uconfig', this.uconfig);
     }
     await store.flush();
+    // 登录态变了：详情缓存里存的是上一个账号（或游客）看到的收藏/评分状态，必须清掉。
+    sharedDetailCache.clear();
     this.session.loggedIn = store.has('ipb_member_id');
     if (!silent) {
       this.message = '已保存 Cookie';

@@ -12,7 +12,8 @@ import { parseFavMeta, FavMeta } from '../parser/FavoritesParser';
 import { GalleryComment } from '../model/GalleryComment';
 import { HomeStats } from '../model/HomeStats';
 import { HomeParser } from '../parser/HomeParser';
-import { CookieStore } from './CookieStore';
+import { CookieJar } from './CookieJar';
+import { DetailCache, sharedDetailCache } from './DetailCache';
 import { EhSite, EhUrl } from './EhUrl';
 import { HttpClient, HttpRequestOptions, HttpResponse } from './HttpClient';
 
@@ -33,12 +34,15 @@ function htmlTitle(html: string): string {
 /** E-Hentai 请求层：站点/Referer/Cookie 组装 + 错误检测 + 解析。 */
 export class EhClient {
   private http: HttpClient;
-  private cookies: CookieStore;
+  private cookies: CookieJar;
+  private cache: DetailCache;
   private defaults: HttpRequestOptions | undefined;
 
-  constructor(http: HttpClient, cookies: CookieStore, defaults?: HttpRequestOptions) {
+  constructor(http: HttpClient, cookies: CookieJar,
+    cache: DetailCache = sharedDetailCache, defaults?: HttpRequestOptions) {
     this.http = http;
     this.cookies = cookies;
+    this.cache = cache;
     this.defaults = defaults;
   }
 
@@ -118,8 +122,14 @@ export class EhClient {
     return HomeParser.parse(resp.body);
   }
 
-  /** 拉取并解析详情页（`thumbSize` 透传设置，封面同样改写）。 */
+  /** 拉取并解析详情页（`thumbSize` 透传设置，封面同样改写）。命中内存缓存时不发请求。 */
   async getGalleryDetail(site: EhSite, gid: number, token: string, thumbSize: number = 0): Promise<GalleryDetail | null> {
+    // 缓存按 site/gid/thumbSize 分键：thumb 已按缩略图尺寸改写，混用会显示错尺寸封面。
+    // 取出的对象只读使用（各页面都是抄字段进自己的 @Local），不得就地修改。
+    const cached: GalleryDetail | null = this.cache.get(site, gid, thumbSize);
+    if (cached !== null) {
+      return cached;
+    }
     const headers: Record<string, string> = {};
     headers['Referer'] = EhUrl.referer(site);
     const opt: HttpRequestOptions = this.requestOptions(headers);
@@ -133,6 +143,8 @@ export class EhClient {
     const detail: GalleryDetail | null = GalleryDetailParser.parse(resp.body, gid, token, thumbSize);
     if (detail === null) {
       Logger.error('Detail', `parse null gid=${gid} len=${resp.body.length} reason=${GalleryDetailParser.lastReason()}`);
+    } else {
+      this.cache.put(site, gid, thumbSize, detail);
     }
     return detail;
   }
@@ -160,6 +172,7 @@ export class EhClient {
     if (result === null) {
       throw new AppError(-1, 'Cannot parse rate gallery result');
     }
+    this.cache.drop(site, gid);
     return result;
   }
 
@@ -189,6 +202,7 @@ export class EhClient {
     if (!found) {
       throw new AppError(-1, 'Comment not posted');
     }
+    this.cache.drop(site, gid);
     return comments;
   }
 
@@ -248,6 +262,7 @@ export class EhClient {
     if (err !== null) {
       throw err;
     }
+    this.cache.drop(site, gid);
   }
 
   /**
