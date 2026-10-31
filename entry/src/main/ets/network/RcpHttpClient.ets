@@ -7,17 +7,23 @@ import { Logger } from '../common/Logger';
 import { requestLine } from './RequestLog';
 import { HttpClient, HttpRequestOptions, HttpResponse } from './HttpClient';
 
-/** 基于 RCP（`@kit.RemoteCommunicationKit`）的 `HttpClient` 实现。 */
-export class RcpHttpClient implements HttpClient {
-  private session: rcp.Session | undefined = undefined;
+/**
+ * 基于 RCP（`@kit.RemoteCommunicationKit`）的 `HttpClient` 实现。
+ *
+ * 全 App 共用一个 session：RCP 的连接池按 session 隔离，每个页面各建一个 = 每次请求都重新 TCP+TLS。
+ * 真机实测（nova 14 Pro，出境 RTT ≈350 ms）：新 session 的页面请求 1.4–2.1 s，
+ * 同一 session 内并发请求 0.5–0.8 s —— 差值就是握手成本。
+ */
+let sharedSession: rcp.Session | undefined = undefined;
 
-  private ensureSession(): rcp.Session {
-    if (this.session === undefined) {
-      this.session = rcp.createSession();
-    }
-    return this.session;
+function sharedRcpSession(): rcp.Session {
+  if (sharedSession === undefined) {
+    sharedSession = rcp.createSession();
   }
+  return sharedSession;
+}
 
+export class RcpHttpClient implements HttpClient {
   async get(url: string, opt?: HttpRequestOptions): Promise<HttpResponse> {
     const headers: Record<string, string> = RcpHttpClient.mergeHeaders(opt);
     const cookies: Record<string, string> = RcpHttpClient.cookiesOf(opt);
@@ -48,7 +54,7 @@ export class RcpHttpClient implements HttpClient {
     const cookies: Record<string, string> = RcpHttpClient.cookiesOf(opt);
     const req = new rcp.Request(url, 'GET', headers, undefined, cookies, undefined, RcpHttpClient.configOf(opt));
     const startedAt: number = Date.now();
-    const resp: rcp.Response = await this.ensureSession().fetch(req);
+    const resp: rcp.Response = await sharedRcpSession().fetch(req);
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
       // 图片字节**只记失败**：成功行会把 1MB 窗口刷满，把真正的失败挤出去。
       Logger.error('Http', requestLine('GET', url, resp.statusCode, resp.body?.byteLength ?? 0,
@@ -61,7 +67,7 @@ export class RcpHttpClient implements HttpClient {
 
   private async send(req: rcp.Request): Promise<HttpResponse> {
     const startedAt: number = Date.now();
-    const resp: rcp.Response = await this.ensureSession().fetch(req);
+    const resp: rcp.Response = await sharedRcpSession().fetch(req);
 
     const ctRaw: string | string[] | undefined = resp.headers['content-type'];
     const contentType: string = typeof ctRaw === 'string' ? ctRaw : '';
