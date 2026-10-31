@@ -11,6 +11,7 @@ import { GalleryPageResult } from '../parser/GalleryPageParser';
 import { DetailParam } from '../model/DetailParam';
 import { ReadingDirection, resolveStartPage, toDisplayIndex, toPage } from '../reader/ReaderMode';
 import { clampPrefetch, neighbors, range } from '../reader/PrefetchPlan';
+import { TokenChunks } from '../reader/TokenChunks';
 import { applyPinch, nextDoubleTapScale, clampOffset, ZOOM_MIN, ZOOM_MAX } from '../reader/ZoomModel';
 import { ImageStore } from '../service/ImageStore';
 import { PhotoSaver } from '../service/PhotoSaver';
@@ -131,7 +132,10 @@ export struct ReaderPage {
   private panBaseY: number = 0;
   private viewW: number = 0;
   private viewH: number = 0;
-  private tokens: string[] = [];
+  /** 页 token：分块取 + 同块并发去重（预取一次并发十几页，常有 4 个挤在同一个 chunk）。 */
+  private tokenChunks: TokenChunks = new TokenChunks((chunk: number): Promise<string[]> => {
+    return this.loadChunkTokens(chunk);
+  }, ReaderPage.PREVIEW_PER_CHUNK);
   private skipHathKey: string = '';
   private gid: number = 0;
   private token: string = '';
@@ -321,7 +325,7 @@ export struct ReaderPage {
       if (detail.pages > 0) {
         this.total = detail.pages;
       }
-      this.tokens = detail.previewTokens.slice();
+      this.tokenChunks.seed(detail.previewTokens);
       if (this.total <= 0) {
         Logger.error('Reader', `no pages gid=${this.gid}`);
         this.message = '没有可阅读的页面';
@@ -388,20 +392,13 @@ export struct ReaderPage {
 
   /** 取某页 pToken；详情页未给出的（>20 页）按预览分块补取。失败直接抛给 `loadPage` 边界处理。 */
   private async ensureToken(page: number): Promise<string | undefined> {
-    let pToken: string | undefined = this.tokens[page];
-    if (pToken !== undefined) {
-      return pToken;
-    }
+    return await this.tokenChunks.ensure(page);
+  }
+
+  /** 拉某个预览分块的 pToken（`ensureClient()` 保证 client 就绪）。 */
+  private async loadChunkTokens(chunk: number): Promise<string[]> {
     const client: EhClient = await this.ensureClient();
-    const chunk: number = Math.floor(page / ReaderPage.PREVIEW_PER_CHUNK);
-    const fetched: string[] =
-      await client.getPreviewTokens(this.site, this.gid, this.token, chunk);
-    for (let i = 0; i < fetched.length; i++) {
-      if (fetched[i] !== undefined && this.tokens[i] === undefined) {
-        this.tokens[i] = fetched[i];
-      }
-    }
-    return this.tokens[page];
+    return client.getPreviewTokens(this.site, this.gid, this.token, chunk);
   }
 
   private async loadPage(page: number, focus: boolean = true): Promise<void> {
@@ -465,7 +462,7 @@ export struct ReaderPage {
         this.skipHathKey = result.skipHathKey;
       }
       if (result.nextPToken !== null) {
-        this.tokens[page + 1] = result.nextPToken;
+        this.tokenChunks.put(page + 1, result.nextPToken);
       }
 
       const url: string = result.imageUrl;

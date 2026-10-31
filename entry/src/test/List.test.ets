@@ -33,6 +33,7 @@ import cacheManagerTest from './service/CacheManager.test';
 import imageStoreTest from './service/ImageStore.test';
 import readerModeTest from './reader/ReaderMode.test';
 import prefetchPlanTest from './reader/PrefetchPlan.test';
+import tokenChunksTest from './reader/TokenChunks.test';
 import zoomModelTest from './reader/ZoomModel.test';
 import appSettingsTest from './state/AppSettings.test';
 import readingProgressStoreTest from './state/ReadingProgressStore.test';
@@ -80,6 +81,7 @@ export default function testsuite() {
   imageStoreTest();
   readerModeTest();
   prefetchPlanTest();
+  tokenChunksTest();
   zoomModelTest();
   appSettingsTest();
   readingProgressStoreTest();
