@@ -1,6 +1,6 @@
 import { describe, it, expect } from '@ohos/hypium';
 import { EhClient } from '../../main/ets/network/EhClient';
-import { DetailCache } from '../../main/ets/network/DetailCache';
+import { DetailCache, sharedDetailCache } from '../../main/ets/network/DetailCache';
 import { CookieJar } from '../../main/ets/network/CookieJar';
 import { HttpClient, HttpRequestOptions, HttpResponse } from '../../main/ets/network/HttpClient';
 import { EhSite } from '../../main/ets/network/EhUrl';
@@ -58,7 +58,7 @@ class FakeHttp implements HttpClient {
 }
 
 function newClient(http: FakeHttp): EhClient {
-  return new EhClient(http, new FakeJar(), new DetailCache(25, 180000, () => 0));
+  return new EhClient(http, new FakeJar(), { cache: new DetailCache(25, 180000, () => 0) });
 }
 
 export default function ehClientCacheTest() {
@@ -95,6 +95,26 @@ export default function ehClientCacheTest() {
       const client: EhClient = newClient(http);
       await client.getGalleryDetail(EhSite.E, GID, TOKEN, 0);
       await client.rateGallery(EhSite.E, GID, TOKEN, 4.5, 12345, 'key');
+      await client.getGalleryDetail(EhSite.E, GID, TOKEN, 0);
+      expect(http.detailGets).assertEqual(2);
+    });
+
+    it('options_omitted_uses_shared_cache', 0, async () => {
+      const http: FakeHttp = new FakeHttp();
+      const client: EhClient = new EhClient(http, new FakeJar());
+      const gid: number = 999000001;
+      await client.getGalleryDetail(EhSite.E, gid, TOKEN, 0);
+      await client.getGalleryDetail(EhSite.E, gid, TOKEN, 0);
+      expect(http.detailGets).assertEqual(1);
+      // 收尾：共享单例是全 App 用的，别把这条用例的数据留给别的用例。
+      sharedDetailCache.clear();
+    });
+
+    it('explicit_disabled_cache_hits_network_every_time', 0, async () => {
+      const http: FakeHttp = new FakeHttp();
+      const client: EhClient =
+        new EhClient(http, new FakeJar(), { cache: new DetailCache(25, 0) });
+      await client.getGalleryDetail(EhSite.E, GID, TOKEN, 0);
       await client.getGalleryDetail(EhSite.E, GID, TOKEN, 0);
       expect(http.detailGets).assertEqual(2);
     });

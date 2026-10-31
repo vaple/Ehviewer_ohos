@@ -31,19 +31,22 @@ function htmlTitle(html: string): string {
   return match === null ? '' : match[1].trim();
 }
 
+/** `EhClient` 的可选配置。必填依赖（http / cookies）留在位置参数上，开关类才进这个对象。 */
+export interface EhClientOptions {
+  /** 详情缓存。缺省 = 全 App 共享实例；`new DetailCache(25, 0)` = 关闭缓存（设备测试用）。 */
+  cache?: DetailCache;
+}
+
 /** E-Hentai 请求层：站点/Referer/Cookie 组装 + 错误检测 + 解析。 */
 export class EhClient {
   private http: HttpClient;
   private cookies: CookieJar;
   private cache: DetailCache;
-  private defaults: HttpRequestOptions | undefined;
 
-  constructor(http: HttpClient, cookies: CookieJar,
-    cache: DetailCache = sharedDetailCache, defaults?: HttpRequestOptions) {
+  constructor(http: HttpClient, cookies: CookieJar, options?: EhClientOptions) {
     this.http = http;
     this.cookies = cookies;
-    this.cache = cache;
-    this.defaults = defaults;
+    this.cache = options !== undefined && options.cache !== undefined ? options.cache : sharedDetailCache;
   }
 
   private async persistCookies(resp: HttpResponse): Promise<void> {
@@ -61,28 +64,9 @@ export class EhClient {
     await this.cookies.flush();
   }
 
-  /**
-   * 统一装配请求选项：调用方头（后写覆盖）+ 身份 Cookie + 默认超时。
-   * `defaults.headers` 参与合并（当前无调用方设置，与旧行为逐字节一致）。
-   */
+  /** 统一装配请求选项：调用方头 + 身份 Cookie。超时由 `RcpHttpClient.configOf` 统一给。 */
   private requestOptions(headers: Record<string, string>): HttpRequestOptions {
-    const merged: Record<string, string> = {};
-    if (this.defaults !== undefined && this.defaults.headers !== undefined) {
-      const keys: string[] = Object.keys(this.defaults.headers);
-      for (let i = 0; i < keys.length; i++) {
-        merged[keys[i]] = this.defaults.headers[keys[i]];
-      }
-    }
-    const names: string[] = Object.keys(headers);
-    for (let i = 0; i < names.length; i++) {
-      merged[names[i]] = headers[names[i]];
-    }
-    const opt: HttpRequestOptions = { cookies: this.cookies.all(), headers: merged };
-    if (this.defaults !== undefined) {
-      if (this.defaults.timeoutMs !== undefined) {
-        opt.timeoutMs = this.defaults.timeoutMs;
-      }
-    }
+    const opt: HttpRequestOptions = { cookies: this.cookies.all(), headers: headers };
     return opt;
   }
 

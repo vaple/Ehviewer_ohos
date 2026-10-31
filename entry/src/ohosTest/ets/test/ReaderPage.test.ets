@@ -21,7 +21,7 @@ export default function readerPageTest() {
     it('get_gallery_page_from_real_detail', 0, async () => {
       const cookies: CookieStore = new CookieStore();
       await cookies.init(await ctx());
-      const client: EhClient = new EhClient(new RcpHttpClient(), cookies, new DetailCache(25, 0));
+      const client: EhClient = new EhClient(new RcpHttpClient(), cookies, { cache: new DetailCache(25, 0) });
 
       const list: GalleryInfo[] = await client.getGalleryList(EhSite.E, EhUrl.frontPage(EhSite.E));
       expect(list.length > 0).assertTrue();
@@ -50,7 +50,7 @@ export default function readerPageTest() {
     it('chunk_preview_tokens_beyond_20', 0, async () => {
       const cookies: CookieStore = new CookieStore();
       await cookies.init(await ctx());
-      const client: EhClient = new EhClient(new RcpHttpClient(), cookies, new DetailCache(25, 0));
+      const client: EhClient = new EhClient(new RcpHttpClient(), cookies, { cache: new DetailCache(25, 0) });
       const list: GalleryInfo[] = await client.getGalleryList(EhSite.E, EhUrl.frontPage(EhSite.E));
       expect(list.length > 0).assertTrue();
 
@@ -81,7 +81,7 @@ export default function readerPageTest() {
     it('detail_exposes_preview_tokens', 0, async () => {
       const cookies: CookieStore = new CookieStore();
       await cookies.init(await ctx());
-      const client: EhClient = new EhClient(new RcpHttpClient(), cookies, new DetailCache(25, 0));
+      const client: EhClient = new EhClient(new RcpHttpClient(), cookies, { cache: new DetailCache(25, 0) });
       const list: GalleryInfo[] = await client.getGalleryList(EhSite.E, EhUrl.frontPage(EhSite.E));
       const first: GalleryInfo = list[0];
       const detail: GalleryDetail | null =

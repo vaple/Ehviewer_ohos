@@ -19,7 +19,7 @@ export default function ehClientTest() {
       const cookies: CookieStore = new CookieStore();
       await cookies.init(await ctx());
 
-      const client: EhClient = new EhClient(new RcpHttpClient(), cookies, new DetailCache(25, 0));
+      const client: EhClient = new EhClient(new RcpHttpClient(), cookies, { cache: new DetailCache(25, 0) });
       const list: GalleryInfo[] = await client.getGalleryList(EhSite.E, EhUrl.frontPage(EhSite.E));
 
       expect(list.length > 0).assertTrue();
@@ -28,7 +28,7 @@ export default function ehClientTest() {
     });
 
     it('gallery_detail_url', 0, () => {
-      const client: EhClient = new EhClient(new RcpHttpClient(), new CookieStore(), new DetailCache(25, 0));
+      const client: EhClient = new EhClient(new RcpHttpClient(), new CookieStore(), { cache: new DetailCache(25, 0) });
       expect(client.getGalleryDetailUrl(EhSite.E, 123456, 'abcdef0123'))
         .assertEqual('https://e-hentai.org/g/123456/abcdef0123/');
     });
