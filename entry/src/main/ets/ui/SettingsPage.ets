@@ -13,7 +13,7 @@ import { AppSettings, displayModeToColorMode } from '../state/AppSettings';
 import { SessionState } from '../state/SessionState';
 import { WindowState } from '../state/WindowState';
 import { DownloadSettings, downloadSettings, clampConcurrency } from '../state/DownloadSettings';
-import { HdsListItemCard, HdsNavDestination, PrefixIcon, SuffixArrow, SuffixBadgeAndArrow, SuffixButton, SuffixSelect } from '@kit.UIDesignKit';
+import { HdsListItemCard, HdsNavDestination, PrefixIcon, SuffixArrow, SuffixBadge, SuffixButton, SuffixSelect } from '@kit.UIDesignKit';
 import { CARD_GAP, CARD_RADIUS, PAGE_PADDING, SHEET_MATERIAL } from './Materials';
 import { TITLE_BAR_H } from './NavStyle';
 import { CacheManager } from '../service/CacheManager';
@@ -812,14 +812,12 @@ export struct SettingsPage {
             HdsListItemCard({
               textItem: {
                 primaryText: { text: '版本号' },
-                secondaryText: {
-                  text: hasUpdate(this.updateStateRef, APP_VERSION_NAME)
-                    ? `${APP_VERSION_NAME} · 有新版本 ${this.updateStateRef.latestVersion}`
-                    : APP_VERSION_NAME
-                }
+                // 「有新版本」只在下面「软件更新」行说一次；这行只做信息展示。
+                secondaryText: { text: APP_VERSION_NAME }
               },
+              // 小红点只表示「有新版本」，不带箭头（这行没有点击行为）。
               suffixItem: hasUpdate(this.updateStateRef, APP_VERSION_NAME)
-                ? new SuffixBadgeAndArrow({ badgeValue: -1 }, { color: $r('app.color.danger') })
+                ? new SuffixBadge({ badgeValue: -1, badgeColor: $r('app.color.danger') })
                 : undefined
             })
             HdsListItemCard({

@@ -77,7 +77,8 @@ export struct MyPage {
                 primaryText: { text: ri.item.title }
               },
               suffixItem: (ri.item.name === '设置' && hasUpdate(this.updateStateRef, VERSION_NAME))
-                ? new SuffixBadgeAndArrow({ badgeValue: -1 }, { color: $r('app.color.danger') })
+                ? new SuffixBadgeAndArrow({ badgeValue: -1, badgeColor: $r('app.color.danger') },
+                  { color: $r('app.color.text_secondary') })
                 : new SuffixArrow({ color: $r('app.color.text_secondary') }),
               onClick: () => {
                 this.pageStack.pushPath({ name: ri.item.name });
