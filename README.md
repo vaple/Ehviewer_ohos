@@ -23,11 +23,11 @@ HarmonyOS NEXT 移植。与 E-Hentai / ExHentai 官方无关：只提供客户�
 
 | 搜索 | 详情 |
 | --- | --- |
-| ![](screenshots/01-search.jpg) | ![](screenshots/02-detail.jpg) |
+| ![](docs/screenshots/01-search.jpg) | ![](docs/screenshots/02-detail.jpg) |
 
 | 阅读器 | 下载 |
 | --- | --- |
-| ![](screenshots/03-reader.jpg) | ![](screenshots/04-downloads.jpg) |
+| ![](docs/screenshots/03-reader.jpg) | ![](docs/screenshots/04-downloads.jpg) |
 
 ## 下载与安装
 
