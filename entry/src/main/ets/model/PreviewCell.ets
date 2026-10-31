@@ -7,9 +7,9 @@
 @ObservedV2
 export class PreviewCell {
   page: number = 0;
-  url: string = '';
-  x: number = 0;
-  y: number = 0;
-  w: number = 0;
-  h: number = 0;
+  @Trace url: string = '';
+  @Trace x: number = 0;
+  @Trace y: number = 0;
+  @Trace w: number = 0;
+  @Trace h: number = 0;
 }

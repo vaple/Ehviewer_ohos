@@ -43,6 +43,8 @@ import galleryRowTest from './ui/GalleryRow.test';
 import materialsTest from './ui/Materials.test';
 import quickSearchTest from './ui/QuickSearch.test';
 import favoritesBatchTest from './ui/FavoritesBatch.test';
+import jumpStripTest from './ui/JumpStrip.test';
+import previewStripSourceTest from './ui/PreviewStripSource.test';
 import updateTest from './network/Update.test';
 
 export default function testsuite() {
@@ -91,5 +93,7 @@ export default function testsuite() {
   materialsTest();
   quickSearchTest();
   favoritesBatchTest();
+  jumpStripTest();
+  previewStripSourceTest();
   updateTest();
 }

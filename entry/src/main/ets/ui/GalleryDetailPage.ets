@@ -158,6 +158,9 @@ export struct GalleryDetailPage {
   private spriteClient: EhClient | undefined = undefined;
   private spriteGid: number = -1;
   private spriteReferer: string = '';
+  /** 块级缓存：详情网格与跳页条带共用，同一块不并发发两次；随 `setPreviews` 清空。 */
+  private chunkCells: Map<number, PreviewCell[]> = new Map<number, PreviewCell[]>();
+  private chunkPromises: Map<number, Promise<PreviewCell[]>> = new Map<number, Promise<PreviewCell[]>>();
   @Local comments: GalleryComment[] = [];
   @Local showSheet: boolean = false;
   /**
@@ -473,6 +476,11 @@ export struct GalleryDetailPage {
     this.lastPrefRow = -1;
     this.chunkInflight.clear();
     this.chunkDone.clear();
+    this.chunkCells.clear();
+    this.chunkPromises.clear();
+    // 详情自带的预览就是第 0 块：先塞进块缓存，跳页条带默认从第 1 页打开时不再重下一遍。
+    // 复用同一批 `PreviewCell` 实例是安全的：两条路径都只读它（条带写入时是拷贝到自己的格子里）。
+    this.chunkCells.set(0, cells);
     this.spriteClient = undefined;
     this.spriteCache.clear();
   }
@@ -574,10 +582,9 @@ export struct GalleryDetailPage {
     if (this.data === null || this.chunkInflight.has(chunk) || this.chunkDone.has(chunk)) {
       return;
     }
-    const d: GalleryDetail = this.data;
     const gid: number = this.gid;
     this.chunkInflight.add(chunk);
-    this.fetchChunk(d, gid, chunk).catch((e: object) => {
+    this.fetchChunk(gid, chunk).catch((e: object) => {
       Logger.error('Detail', `preview chunk failed gid=${gid} chunk=${chunk}: ${e}`);
       if (this.gid === gid) {
         this.chunkInflight.delete(chunk);
@@ -585,13 +592,66 @@ export struct GalleryDetailPage {
     });
   }
 
-  private async fetchChunk(d: GalleryDetail, gid: number, chunk: number): Promise<void> {
-    const site: EhSite = this.settings.site;
-    const cookies: CookieStore = new CookieStore();
-    await cookies.init(this.context());
-    const client: EhClient = new EhClient(new RcpHttpClient(), cookies);
-    const fetched: PreviewItem[] =
-      await client.getPreviews(site, d.gid, d.token, chunk);
+  /**
+   * 取一块（20 页）的预览格。请求本身失败要抛：调用方要能区分「这块确实没有预览」与「这次没取到」。
+   */
+  private async fetchChunkCells(chunk: number): Promise<PreviewCell[]> {
+    const d: GalleryDetail | null = this.data;
+    if (d === null) {
+      throw new Error('detail not ready');
+    }
+    const gid: number = this.gid;
+    const client: EhClient = await this.ensurePreviewClient();
+    const items: PreviewItem[] = await client.getPreviews(this.settings.site, d.gid, d.token, chunk);
+    if (this.gid !== gid) {
+      // 中途换了画廊：不能把这份结果当成「没有预览」落进缓存 / done。
+      throw new Error('gallery changed');
+    }
+    const cells: PreviewCell[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const cell: PreviewCell = new PreviewCell();
+      cell.page = items[i].page;
+      cell.url = items[i].imageUrl;
+      cell.x = items[i].x;
+      cell.y = items[i].y;
+      cell.w = items[i].w;
+      cell.h = items[i].h;
+      cells.push(cell);
+    }
+    return cells;
+  }
+
+  /** 网格与跳页条带共用的块入口：先命中缓存，再复用同块的 in-flight promise（同一块不发两次）。 */
+  private previewChunk(chunk: number): Promise<PreviewCell[]> {
+    const cached: PreviewCell[] | undefined = this.chunkCells.get(chunk);
+    if (cached !== undefined) {
+      return Promise.resolve(cached);
+    }
+    const running: Promise<PreviewCell[]> | undefined = this.chunkPromises.get(chunk);
+    if (running !== undefined) {
+      return running;
+    }
+    const gid: number = this.gid;
+    const p: Promise<PreviewCell[]> = this.fetchChunkCells(chunk);
+    this.chunkPromises.set(chunk, p);
+    p.then((cells: PreviewCell[]) => {
+      // 只清理自己那一条：切画廊清空后可能有新请求占了同一个 key，别把新的删掉。
+      if (this.chunkPromises.get(chunk) === p) {
+        this.chunkPromises.delete(chunk);
+      }
+      if (this.gid === gid) {
+        this.chunkCells.set(chunk, cells);
+      }
+    }).catch((_e: object) => {
+      if (this.chunkPromises.get(chunk) === p) {
+        this.chunkPromises.delete(chunk);
+      }
+    });
+    return p;
+  }
+
+  private async fetchChunk(gid: number, chunk: number): Promise<void> {
+    const fetched: PreviewCell[] = await this.previewChunk(chunk);
     if (this.gid !== gid) {
       return;
     }
@@ -599,14 +659,7 @@ export struct GalleryDetailPage {
     const fresh: PreviewCell[] = [];
     for (let i = 0; i < fetched.length; i++) {
       if (!this.loadedPages.has(fetched[i].page)) {
-        const cell: PreviewCell = new PreviewCell();
-        cell.page = fetched[i].page;
-        cell.url = fetched[i].imageUrl;
-        cell.x = fetched[i].x;
-        cell.y = fetched[i].y;
-        cell.w = fetched[i].w;
-        cell.h = fetched[i].h;
-        fresh.push(cell);
+        fresh.push(fetched[i]);
         this.loadedPages.add(fetched[i].page);
         if (fetched[i].page > this.maxLoadedPage) {
           this.maxLoadedPage = fetched[i].page;
@@ -618,64 +671,6 @@ export struct GalleryDetailPage {
     } else {
       this.chunkDone.add(chunk);
     }
-  }
-
-  /**
-   * 跳页半模态的邻域缩略图：只取 `page ± span` 覆盖到的 1–2 个分块。
-   *
-   * 分块接口是 `?p=<页/20>`（每块 20 张），所以「看 200 页前后」= 2 个请求，
-   * 和「给整个画廊铺缩略图」（2000 页 = 100 个请求）不是一个量级。
-   * 两块并行取（串行会把首屏等待翻倍）；全部失败才抛错，让半模态显示失败而不是「这里没有预览图」。
-   */
-  private async fetchJumpWindow(page: number, span: number): Promise<PreviewCell[]> {
-    const d: GalleryDetail | null = this.data;
-    if (d === null || this.pages <= 0) {
-      return [];
-    }
-    const from: number = Math.max(0, page - span);
-    const to: number = Math.min(this.pages - 1, page + span);
-    const chunks: number[] = [];
-    const first: number = Math.floor(from / 20);
-    const last: number = Math.floor(to / 20);
-    for (let chunk = first; chunk <= last; chunk++) {
-      chunks.push(chunk);
-    }
-    const client: EhClient = await this.ensurePreviewClient();
-    let failed: number = 0;
-    const parts: PreviewItem[][] = await Promise.all(
-      chunks.map((chunk: number): Promise<PreviewItem[]> =>
-        client.getPreviews(this.settings.site, d.gid, d.token, chunk)
-          .catch((e: object): PreviewItem[] => {
-            failed += 1;
-            Logger.error('Detail', `jump chunk failed gid=${d.gid} chunk=${chunk}: ${e}`);
-            const none: PreviewItem[] = [];
-            return none;
-          })));
-    const cells: PreviewCell[] = [];
-    const seen: Set<number> = new Set<number>();
-    for (let p = 0; p < parts.length; p++) {
-      const items: PreviewItem[] = parts[p];
-      for (let i = 0; i < items.length; i++) {
-        const item: PreviewItem = items[i];
-        if (item.page < from || item.page > to || seen.has(item.page)) {
-          continue;
-        }
-        seen.add(item.page);
-        const cell: PreviewCell = new PreviewCell();
-        cell.page = item.page;
-        cell.url = item.imageUrl;
-        cell.x = item.x;
-        cell.y = item.y;
-        cell.w = item.w;
-        cell.h = item.h;
-        cells.push(cell);
-      }
-    }
-    if (cells.length === 0 && failed > 0) {
-      throw new Error(`jump window unavailable (page=${page})`);
-    }
-    cells.sort((a: PreviewCell, b: PreviewCell) => a.page - b.page);
-    return cells;
   }
 
   /** 打开跳页半模态（与收藏/下载共用一个 `bindSheet`，见 `sheetKind`）。 */
@@ -871,7 +866,7 @@ export struct GalleryDetailPage {
         JumpSheet({
           pages: this.pages,
           initialPage: this.progressPage >= 0 ? this.progressPage : 0,
-          fetchWindow: (page: number, span: number) => this.fetchJumpWindow(page, span),
+          loadChunk: (chunk: number) => this.previewChunk(chunk),
           spriteOf: (cell: PreviewCell) => this.spriteFor(cell, this.gid),
           onPick: (page: number) => {
             // 退场动画走完再进阅读器（见 `pendingJumpPage`）。
