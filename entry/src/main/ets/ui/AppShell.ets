@@ -1,4 +1,4 @@
-import { AppStorageV2, CapsuleSegmentButtonV2, LengthMetrics, PersistenceV2, SegmentButtonV2ItemOptions, SegmentButtonV2Items, SymbolGlyphModifier, window } from '@kit.ArkUI';
+import { AppStorageV2, CapsuleSegmentButtonV2, LengthMetrics, PersistenceV2, promptAction, SegmentButtonV2ItemOptions, SegmentButtonV2Items, SymbolGlyphModifier, window } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { resourceManager } from '@kit.LocalizationKit';
 import { BlurStrategy, HdsNavigation, HdsNavigationTitleMode, HdsTabs, HdsTabsController, HdsNavigationMenuContentOptions, ScrollEffectType } from '@kit.UIDesignKit';
@@ -14,7 +14,7 @@ import { SearchPage } from './SearchPage';
 import { ReaderPage } from './ReaderPage';
 import { SettingsPage } from './SettingsPage';
 import { DownloadsPage } from './DownloadsPage';
-import { HDS_MATERIAL, PAGE_PADDING } from './Materials';
+import { HDS_MATERIAL, PAGE_PADDING, SHEET_MATERIAL } from './Materials';
 import { RANK_CHIPS_H, TITLE_BAR_H } from './NavStyle';
 import { RANK_RANGES, RankState } from '../state/RankState';
 import { SessionState } from '../state/SessionState';
@@ -22,6 +22,9 @@ import { WindowState } from '../state/WindowState';
 import { AppSettings, displayModeToColorMode } from '../state/AppSettings';
 import { CookieStore } from '../network/CookieStore';
 import { downloadManager } from '../service/DownloadManager';
+import { UpdateManager, DownloadStart } from '../service/UpdateManager';
+import { UpdateState, hasUpdate, SNOOZE_MS, updateState } from '../state/UpdateState';
+import { VERSION_NAME } from 'BuildProfile';
 import { Logger } from '../common/Logger';
 
 const TAB_TITLES: string[] = ['热门', '订阅', '排行', '我的'];
@@ -55,6 +58,11 @@ export struct AppShell {
   private session: SessionState = AppStorageV2.connect(SessionState, () => new SessionState())!;
   /** 排行档位（标题栏胶囊写、`TopListPage` 监听重载）。 */
   private rankState: RankState = AppStorageV2.connect(RankState, () => new RankState())!;
+  /** 更新提示半模态（release 说明原文只在这里展示，关于页不再放）。 */
+  @Local updatePromptOpen: boolean = false;
+  /** 打开半模态前先定好（`bindSheet` 的 builder 只在打开时构建一次）。 */
+  @Local promptVersion: string = '';
+  @Local promptNotes: string = '';
 
   /** 冷启动同步登录态（Cookie 本体已落盘；杀进程重启后内存态归零，在此重算）。 */
   private async refreshLoginState(): Promise<void> {
@@ -77,6 +85,79 @@ export struct AppShell {
       await downloadManager.init(ctx);
     } catch (e) {
       Logger.error('Download', `manager init failed: ${e}`);
+    }
+  }
+
+  /**
+   * 冷启动静默检查更新：失败只记日志；有新版且不在「稍后」窗口内才提示。
+   * 不 await（首帧不等网络）；提示是半模态（说明原文可滚动，「稍后」= 24 小时内不再弹）。
+   */
+  private async checkUpdates(): Promise<void> {
+    const ok: boolean = await UpdateManager.check();
+    if (!ok) {
+      return;
+    }
+    const state: UpdateState = updateState();
+    if (!hasUpdate(state, VERSION_NAME)) {
+      return;
+    }
+    if (Date.now() < state.snoozeUntilMs) {
+      return;
+    }
+    this.promptVersion = state.latestVersion;
+    this.promptNotes = state.notes;
+    this.updatePromptOpen = true;
+  }
+
+  /** 提示半模态的内容：说明原文（可滚动）+ 稍后 / 去下载。 */
+  @Builder
+  updatePromptSheet() {
+    Column() {
+      Scroll() {
+        Text(this.promptNotes.length > 0 ? this.promptNotes : '—')
+          .fontSize(12)
+          .fontColor($r('app.color.text_secondary'))
+          .width('100%')
+          .copyOption(CopyOptions.LocalDevice)
+      }
+      .layoutWeight(1)
+      .width('100%')
+      .align(Alignment.Top)
+      .scrollBar(BarState.Off)
+
+      Row({ space: 12 }) {
+        Button('稍后')
+          .layoutWeight(1)
+          .onClick(() => {
+            const state: UpdateState = updateState();
+            state.snoozeUntilMs = Date.now() + SNOOZE_MS;
+            this.updatePromptOpen = false;
+          })
+        Button('下载')
+          .layoutWeight(1)
+          .onClick(() => {
+            this.updatePromptOpen = false;
+            this.downloadUpdate();
+          })
+      }
+      .width('100%')
+      .margin({ top: 16 })
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ left: PAGE_PADDING, right: PAGE_PADDING, bottom: 16 })
+  }
+
+  /** 提示里点「下载」：直接弹保存面板 + 交给系统下载服务，不再经过中间页。 */
+  private async downloadUpdate(): Promise<void> {
+    const ctx: common.Context = this.getUIContext().getHostContext() as common.Context;
+    const result: DownloadStart = await UpdateManager.pickAndStart(ctx);
+    if (result === DownloadStart.STARTED) {
+      promptAction.showToast({ message: '已开始下载，进度见通知栏；下载完请用自签工具签名后安装' });
+    } else if (result === DownloadStart.NO_URL) {
+      promptAction.showToast({ message: '没有可下载的地址' });
+    } else if (result === DownloadStart.FAILED) {
+      promptAction.showToast({ message: '下载没能开始，请重试' });
     }
   }
 
@@ -392,11 +473,21 @@ export struct AppShell {
     // 折叠屏展开不断裂：Auto 会在宽屏进分栏（左 NavBar + 右空 content），强制 Stack 单栏铺满。
     .mode(NavigationMode.Stack)
     .navDestination(this.pageMap)
+    // 更新提示：半模态而不是弹窗——release 说明原文要能滚动看全。
+    .bindSheet($$this.updatePromptOpen, this.updatePromptSheet(), {
+      title: { title: `发现新版本 ${this.promptVersion}` },
+      height: SheetSize.MEDIUM,
+      systemMaterial: SHEET_MATERIAL,
+      onDisappear: () => {
+        this.updatePromptOpen = false;
+      }
+    })
     .onAppear(() => {
       this.refreshLoginState();
       this.applyDisplayMode();
       this.applySafeArea();
       this.initDownloads();
+      this.checkUpdates();
     })
   }
 }

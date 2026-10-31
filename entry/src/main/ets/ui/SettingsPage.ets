@@ -13,7 +13,7 @@ import { AppSettings, displayModeToColorMode } from '../state/AppSettings';
 import { SessionState } from '../state/SessionState';
 import { WindowState } from '../state/WindowState';
 import { DownloadSettings, downloadSettings, clampConcurrency } from '../state/DownloadSettings';
-import { HdsListItemCard, HdsNavDestination, PrefixIcon, SuffixArrow, SuffixSelect, SuffixText } from '@kit.UIDesignKit';
+import { HdsListItemCard, HdsNavDestination, PrefixIcon, SuffixArrow, SuffixBadgeAndArrow, SuffixButton, SuffixSelect } from '@kit.UIDesignKit';
 import { CARD_GAP, CARD_RADIUS, PAGE_PADDING, SHEET_MATERIAL } from './Materials';
 import { TITLE_BAR_H } from './NavStyle';
 import { CacheManager } from '../service/CacheManager';
@@ -23,6 +23,8 @@ import { ExportMeta, LogExport } from '../service/LogExport';
 import { VERSION_NAME } from 'BuildProfile';
 import { clampPrefetch, PREFETCH_MAX, PREFETCH_MIN } from '../reader/PrefetchPlan';
 import { navTitleBarStyle } from './NavStyle';
+import { UpdateState, hasUpdate, updateState, updateSummary } from '../state/UpdateState';
+import { DownloadStart, UpdateManager } from '../service/UpdateManager';
 
 const LOGIN_URL: string = 'https://forums.e-hentai.org/index.php?act=Login';
 
@@ -110,6 +112,10 @@ export struct SettingsPage {
   private windowState: WindowState = AppStorageV2.connect(WindowState, () => new WindowState())!;
   /** 下载设置（页级并发；独立持久化 key）。 */
   private dlSettings: DownloadSettings = downloadSettings();
+  /** 更新检查结果（持久化；版本号行的红点与副标题读它）。 */
+  private updateStateRef: UpdateState = updateState();
+  /** 手动检查进行中（防重复点击）。 */
+  @Local updateChecking: boolean = false;
 
   private context(): common.Context {
     return this.getUIContext().getHostContext() as common.Context;
@@ -382,6 +388,55 @@ export struct SettingsPage {
       promptAction.showToast({ message: '清理失败，请重试' });
     }
     this.cacheBusy = false;
+  }
+
+  /** 手动检查更新：结果用 toast 就地反馈（说明原文仍只在冷启动提示里）。 */
+  private async checkUpdates(): Promise<void> {
+    if (this.updateChecking) {
+      return;
+    }
+    this.updateChecking = true;
+    try {
+      const ok: boolean = await UpdateManager.check();
+      if (!ok) {
+        promptAction.showToast({ message: '检查失败，请稍后重试' });
+      } else if (hasUpdate(this.updateStateRef, APP_VERSION_NAME)) {
+        promptAction.showToast({ message: `发现新版本 ${this.updateStateRef.latestVersion}` });
+      } else {
+        promptAction.showToast({ message: '已是最新版本' });
+      }
+    } catch (e) {
+      Logger.error('Update', `manual check failed: ${e}`);
+      promptAction.showToast({ message: '检查失败，请稍后重试' });
+    } finally {
+      this.updateChecking = false;
+    }
+  }
+
+  /** 「下载」：系统保存面板 → 交给系统下载服务；取消不报错。 */
+  private async downloadUpdate(): Promise<void> {
+    const result: DownloadStart = await UpdateManager.pickAndStart(this.context());
+    if (result === DownloadStart.STARTED) {
+      promptAction.showToast({ message: '已开始下载，进度见通知栏；下载完请用自签工具签名后安装' });
+    } else if (result === DownloadStart.NO_URL) {
+      promptAction.showToast({ message: '没有可下载的地址' });
+    } else if (result === DownloadStart.FAILED) {
+      promptAction.showToast({ message: '下载没能开始，请重试' });
+    }
+  }
+
+  /** 交给系统浏览器打开。 */
+  private openUrl(url: string): void {
+    const ctx: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const want: Want = {
+      action: 'ohos.want.action.viewData',
+      entities: ['entity.system.browsable'],
+      uri: url
+    };
+    ctx.startAbility(want).catch((e: object) => {
+      Logger.error('Update', `open url failed: ${e}`);
+      promptAction.showToast({ message: '打不开浏览器' });
+    });
   }
 
   /** 官方入口：系统「设置-应用信息」页（存储/权限都在里面，由系统统一管理）。 */
@@ -752,8 +807,43 @@ export struct SettingsPage {
 
             SubHeaderV2({ title: new SubHeaderV2Title({ primaryTitle: '关于' }) })
             HdsListItemCard({
-              textItem: { primaryText: { text: '版本号' } },
-              suffixItem: new SuffixText({ text: APP_VERSION_NAME })
+              textItem: {
+                primaryText: { text: '版本号' },
+                secondaryText: {
+                  text: hasUpdate(this.updateStateRef, APP_VERSION_NAME)
+                    ? `${APP_VERSION_NAME} · 有新版本 ${this.updateStateRef.latestVersion}`
+                    : APP_VERSION_NAME
+                }
+              },
+              suffixItem: hasUpdate(this.updateStateRef, APP_VERSION_NAME)
+                ? new SuffixBadgeAndArrow({ badgeValue: -1 }, { color: $r('app.color.danger') })
+                : undefined
+            })
+            HdsListItemCard({
+              textItem: {
+                primaryText: { text: '软件更新' },
+                secondaryText: { text: updateSummary(this.updateStateRef, APP_VERSION_NAME) }
+              },
+              suffixItem: hasUpdate(this.updateStateRef, APP_VERSION_NAME)
+                ? new SuffixButton({
+                    text: '下载',
+                    onClick: () => { this.downloadUpdate(); }
+                  })
+                : new SuffixButton({
+                    text: this.updateChecking ? '检查中…' : '检查更新',
+                    enable: !this.updateChecking,
+                    onClick: () => { this.checkUpdates(); }
+                  })
+            })
+            HdsListItemCard({
+              textItem: {
+                primaryText: { text: 'GitHub 项目' },
+                secondaryText: { text: 'github.com/vaple/Ehviewer_ohos' }
+              },
+              suffixItem: new SuffixArrow({ color: $r('app.color.text_secondary') }),
+              onClick: () => {
+                this.openUrl('https://github.com/vaple/Ehviewer_ohos');
+              }
             })
             HdsListItemCard({
               textItem: {

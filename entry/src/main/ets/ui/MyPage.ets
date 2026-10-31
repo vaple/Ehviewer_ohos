@@ -1,11 +1,13 @@
 import { AppStorageV2, PersistenceV2 } from '@kit.ArkUI';
-import { HdsListItemCard, PrefixIcon, SuffixArrow } from '@kit.UIDesignKit';
+import { HdsListItemCard, PrefixIcon, SuffixArrow, SuffixBadgeAndArrow } from '@kit.UIDesignKit';
 import { SessionState } from '../state/SessionState';
 import { AppSettings } from '../state/AppSettings';
 import { WindowState } from '../state/WindowState';
 import { CARD_GAP, TAB_BAR_CLEARANCE } from './Materials';
 import { TITLE_BAR_H } from './NavStyle';
 import { EhSite } from '../network/EhUrl';
+import { VERSION_NAME } from 'BuildProfile';
+import { UpdateState, hasUpdate, updateState } from '../state/UpdateState';
 
 /** “我的”入口项（图标 + 标题 + 路由名）。 */
 interface MyEntry {
@@ -39,6 +41,8 @@ export struct MyPage {
     key: 'AppSettings9',
     defaultCreator: () => new AppSettings()
   })!;
+  /** 更新检查结果（「设置」入口红点读它）。 */
+  private updateStateRef: UpdateState = updateState();
 
   private entries: MyEntry[] = MY_ENTRIES;
 
@@ -72,7 +76,9 @@ export struct MyPage {
               textItem: {
                 primaryText: { text: ri.item.title }
               },
-              suffixItem: new SuffixArrow(),
+              suffixItem: (ri.item.name === '设置' && hasUpdate(this.updateStateRef, VERSION_NAME))
+                ? new SuffixBadgeAndArrow({ badgeValue: -1 }, { color: $r('app.color.danger') })
+                : new SuffixArrow({ color: $r('app.color.text_secondary') }),
               onClick: () => {
                 this.pageStack.pushPath({ name: ri.item.name });
               }
