@@ -1,5 +1,8 @@
 /node_modules/
-/tools/
+# tools/ 默认是本机脚本；但 tagdb 生成脚本必须入库——产物 rawfile/tagdb.v1.tsv 会提交，
+# 没有脚本别人就复现不出来（也没法发版前更新快照）。
+/tools/*
+!/tools/tagdb/
 /oh_modules/
 /local.properties
 /.idea/

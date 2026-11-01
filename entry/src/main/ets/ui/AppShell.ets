@@ -20,6 +20,8 @@ import { RANK_RANGES, RankState } from '../state/RankState';
 import { SessionState } from '../state/SessionState';
 import { WindowState } from '../state/WindowState';
 import { AppSettings, displayModeToColorMode } from '../state/AppSettings';
+import { TagSettings } from '../state/TagSettings';
+import { TagDb } from '../tagdb/TagDb';
 import { CookieStore } from '../network/CookieStore';
 import { downloadManager } from '../service/DownloadManager';
 import { UpdateManager, DownloadStart } from '../service/UpdateManager';
@@ -56,6 +58,12 @@ export struct AppShell {
   })!;
   /** 登录态（内存态；`SettingsPage` 写 Cookie 后置位，`MyPage` 读取展示）。 */
   private session: SessionState = AppStorageV2.connect(SessionState, () => new SessionState())!;
+  /** 标签翻译开关（独立 key `TagSettings2`；不并进 `AppSettings`，见 `state/AGENTS.md` #24）。 */
+  @Local tagSettings: TagSettings = PersistenceV2.globalConnect({
+    type: TagSettings,
+    key: 'TagSettings2',
+    defaultCreator: () => new TagSettings()
+  })!;
   /** 排行档位（标题栏胶囊写、`TopListPage` 监听重载）。 */
   private rankState: RankState = AppStorageV2.connect(RankState, () => new RankState())!;
   /** 更新提示半模态（release 说明原文只在这里展示，关于页不再放）。 */
@@ -488,6 +496,9 @@ export struct AppShell {
       this.applySafeArea();
       this.initDownloads();
       this.checkUpdates();
+      // 标签翻译：应用级只在这里装一次（页面里不加载）；开关关闭时 ensureLoaded 直接返回、不读文件。
+      TagDb.bindSettings(this.tagSettings);
+      TagDb.ensureLoaded(this.getUIContext().getHostContext() as common.Context);
     })
   }
 }

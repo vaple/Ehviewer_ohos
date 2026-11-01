@@ -1,5 +1,9 @@
 * text=auto eol=lf
 
+# tagdb 快照禁止裸 CR（解析端会整份拒绝）。虽然上面的 eol=lf 已覆盖，这里单独锁死：
+# 将来有人改全局规则时，不能顺手把这份数据文件变成 CRLF。
+entry/src/main/resources/rawfile/*.tsv text eol=lf
+
 *.png binary
 *.jpg binary
 *.jpeg binary

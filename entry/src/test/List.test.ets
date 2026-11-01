@@ -46,6 +46,8 @@ import favoritesBatchTest from './ui/FavoritesBatch.test';
 import jumpStripTest from './ui/JumpStrip.test';
 import previewStripSourceTest from './ui/PreviewStripSource.test';
 import updateTest from './network/Update.test';
+import tagDbFormatTest from './tagdb/TagDbFormat.test';
+import tagDbTest from './tagdb/TagDb.test';
 
 export default function testsuite() {
   appErrorTest();
@@ -96,4 +98,6 @@ export default function testsuite() {
   jumpStripTest();
   previewStripSourceTest();
   updateTest();
+  tagDbFormatTest();
+  tagDbTest();
 }

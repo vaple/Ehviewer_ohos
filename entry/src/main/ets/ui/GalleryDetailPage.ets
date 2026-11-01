@@ -11,7 +11,6 @@ import { EhClient } from '../network/EhClient';
 import { ImageStore } from '../service/ImageStore';
 import { RateResult } from '../network/EhApi';
 import { Logger } from '../common/Logger';
-import { hapticTap } from '../common/Haptic';
 import { setDiagContext } from '../service/CrashCollector';
 import { GalleryDetail } from '../model/GalleryDetail';
 import { GalleryComment } from '../model/GalleryComment';
@@ -49,6 +48,8 @@ import { DownloadDao } from '../db/dao/DownloadDao';
 import { QuotaLine } from './QuotaLine';
 import { PreviewCell } from '../model/PreviewCell';
 import { JumpSheet } from './JumpSheet';
+import { NsLabel, TagChip } from './TagChip';
+import { TagDb } from '../tagdb/TagDb';
 
 /** 骨架屏预览占位格数（2 行 × 3 列，与真实网格同列宽）。 */
 const SKELETON_PREVIEW_CELLS: number[] = [0, 1, 2, 3, 4, 5];
@@ -63,58 +64,6 @@ const READ_PILL_GAP: number = 8;
 const READ_PILL_PAD: number = 16;
 /** 16fp 等宽数字的单字符宽度（vp）：官方主按钮槽只收显式宽度，只能按位数估算。 */
 const READ_PILL_DIGIT: number = 9.6;
-
-/** 标签 chip：点按搜索；长按菜单二选（搜索 / 屏蔽此标签）。点按语义与原来一致。 */
-@ComponentV2
-struct TagChip {
-  @Require @Param ns: string;
-  @Require @Param tag: string;
-  @Event onSearch: (ns: string, tag: string) => void = (_ns: string, _tag: string) => {};
-  @Event onBlock: (ns: string, tag: string) => void = (_ns: string, _tag: string) => {};
-  @Event onExcludeSearch: (ns: string, tag: string) => void = (_ns: string, _tag: string) => {};
-  @Event onCopy: (ns: string, tag: string) => void = (_ns: string, _tag: string) => {};
-
-  @Builder
-  tagMenu() {
-    Menu() {
-      MenuItem({ content: '搜索' })
-        .onClick(() => {
-          this.onSearch(this.ns, this.tag);
-        })
-      MenuItem({ content: '从本次搜索排除' })
-        .onClick(() => {
-          this.onExcludeSearch(this.ns, this.tag);
-        })
-      MenuItem({ content: '加入搜索排除' })
-        .onClick(() => {
-          this.onBlock(this.ns, this.tag);
-        })
-      MenuItem({ content: '复制标签内容' })
-        .onClick(() => {
-          this.onCopy(this.ns, this.tag);
-        })
-    }
-  }
-
-  build() {
-    // 官方 ChipV2（应用级材质开启后自带系统样式）；长按菜单挂在外层 Row（自定义组件的属性链挂不了通用属性）。
-    Row() {
-      ChipV2({
-        chipV2Options: new ChipV2Options({
-          label: new ChipV2Label({ text: this.tag, fontSize: LengthMetrics.fp(12) }),
-          size: ChipV2Size.SMALL,
-          allowClose: false,
-          onClicked: () => {
-            this.onSearch(this.ns, this.tag);
-          }
-        })
-      })
-    }
-    .margin(4)
-    // `onAppear` = 菜单真正弹出来那一刻 → 轻振一次（长按被识别的确认，与菜单动画同步；点按不受影响）。
-    .bindContextMenu(this.tagMenu, ResponseType.LongPress, { onAppear: () => hapticTap() })
-  }
-}
 
 /** 详情页。参数经 `NavDestination.onReady(ctx)` 的 `ctx.pathInfo.param` 传入。 */
 @ComponentV2
@@ -164,10 +113,13 @@ export struct GalleryDetailPage {
   @Local comments: GalleryComment[] = [];
   @Local showSheet: boolean = false;
   /**
-   * 半模态内容：1 = 收藏夹，2 = 下载，3 = 跳页。
+   * 半模态内容：1 = 收藏夹，2 = 下载，3 = 跳页，4 = 标签释义。
    * 同一次只能挂一个半模态（同一节点挂两个 `bindSheet` 会静默失效），所以用 kind 切内容，不要并列写多个。
    */
   @Local sheetKind: number = 0;
+  /** 标签释义半模态的原文（`ns`/`tag` 都是站点原串；`showSheet = true` 之前必须先写好，见 `ui/AGENTS.md` #20）。 */
+  @Local explainNs: string = '';
+  @Local explainTag: string = '';
   /** 下载画质 + 忙碌态。 */
   @Local dlQuality: number = DownloadQuality.ORIGINAL;
   @Local dlBusy: boolean = false;
@@ -687,6 +639,18 @@ export struct GalleryDetailPage {
     }, 0);
   }
 
+  /** 打开标签释义半模态（同样复用那一个 `bindSheet` 与 `sheetKind`）。 */
+  private openExplainSheet(ns: string, tag: string): void {
+    // 内容在 builder 构建时才读：先把原串落地，再打开（`ui/AGENTS.md` #20）。
+    this.explainNs = ns;
+    this.explainTag = tag;
+    this.sheetKind = 4;
+    // 与跳页同理：`detents`/标题按上一次构建取值，先让 kind 的重渲染落地，下一拍再打开。
+    setTimeout(() => {
+      this.showSheet = true;
+    }, 0);
+  }
+
   /** 底部动作条收放：向下滚（且已过标题区）收起，向上滚立刻回来。 */
   private refreshBar(y: number): void {
     const dy: number = y - this.lastScrollY;
@@ -732,6 +696,37 @@ export struct GalleryDetailPage {
       });
     }
     return options;
+  }
+
+  /** 标签释义半模态内容：中文名（主）/ 原文 `ns:tag`（次）/ 释义正文（长文可滚动）。 */
+  @Builder
+  explainSheet() {
+    Column({ space: 8 }) {
+      Text(TagDb.translateTag(this.explainNs, this.explainTag))
+        .fontSize(18)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_primary'))
+        .width('100%')
+      Text(`${this.explainNs}:${this.explainTag}`)
+        .fontSize(12)
+        .fontColor($r('app.color.text_secondary'))
+        .width('100%')
+      // 释义最长有整篇 wiki 段落（上游换行已还原），必须能滚，交给半模态的中/大两档高度。
+      Scroll() {
+        Text(TagDb.intro(this.explainNs, this.explainTag))
+          .fontSize(14)
+          .lineHeight(22)
+          .fontColor($r('app.color.text_primary'))
+          .width('100%')
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .scrollBar(BarState.Auto)
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ left: 16, right: 16, top: 8, bottom: 16 })
+    .alignItems(HorizontalAlign.Start)
   }
 
   /** 拉收藏夹元信息（真实类名 + 计数）；失败给一次人话提示，不静默显示 0。 */
@@ -874,6 +869,8 @@ export struct GalleryDetailPage {
             this.showSheet = false;
           }
         })
+      } else if (this.sheetKind === 4) {
+        this.explainSheet()
       } else {
         this.downloadSheet()
       }
@@ -1201,11 +1198,7 @@ export struct GalleryDetailPage {
             Repeat(this.tagGroups)
               .each((ri: RepeatItem<TagGroup>) => {
                 Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
-                  Text(`${ri.item.namespace}:`)
-                    .fontSize(12)
-                    .fontColor($r('app.color.text_secondary'))
-                    .margin(4)
-                    .padding({ top: 4, bottom: 4 })
+                  NsLabel({ ns: ri.item.namespace })
                   Repeat(ri.item.tags)
                     .each((ti: RepeatItem<string>) => {
                       TagChip({
@@ -1222,6 +1215,9 @@ export struct GalleryDetailPage {
                         onBlock: (ns: string, tag: string) => {
                           const tagQuery: string = tagQueryOf(ns, tag);
                           this.confirmBlock(tagQuery, tagQuery, '标签');
+                        },
+                        onExplain: (ns: string, tag: string) => {
+                          this.openExplainSheet(ns, tag);
                         }
                       })
                     })
@@ -1387,8 +1383,8 @@ export struct GalleryDetailPage {
       .height('100%')
       // 收藏分类：官方半模态 + 系统材质（不再自绘遮罩浮层）。
       .bindSheet($$this.showSheet, this.sheetContent(), {
-        title: { title: this.sheetKind === 1 ? '选择收藏夹' : (this.sheetKind === 3 ? '跳页' : '下载') },
-        // 跳页按内容定高；收藏/下载保留中/大两档。
+        title: { title: this.sheetKind === 1 ? '选择收藏夹' : (this.sheetKind === 3 ? '跳页' : (this.sheetKind === 4 ? '标签释义' : '下载')) },
+        // 跳页按内容定高；收藏 / 下载 / 释义都用中/大两档（释义正文长，靠大档 + 内部滚动）。
         detents: this.sheetKind === 3
           ? [JUMP_SHEET_H]
           : [SheetSize.MEDIUM, SheetSize.LARGE],
