@@ -12,7 +12,11 @@ import { AppSettings } from '../state/AppSettings';
 import { WindowState } from '../state/WindowState';
 import { HdsNavDestination, HideMode } from '@kit.UIDesignKit';
 import { GalleryRow, GalleryRowItem, loadMissingThumbs, pushGalleryDetail } from './GalleryRow';
-import { fCatsMask, excludedFromSelected, encodeAdvance, ALL_CATS, languageQueryOf, SEARCH_LANGUAGES, exclusionQueryOf, SearchFilters } from '../search/SearchQuery';
+import { fCatsMask, excludedFromSelected, encodeAdvance, ALL_CATS, languageQueryOf, SEARCH_LANGUAGES, exclusionQueryOf, SearchFilters, exactTagQuery } from '../search/SearchQuery';
+import { replaceRange, trailingCjkToken, TagToken } from '../search/TagInput';
+import { TagCandidate } from '../tagdb/TagCandidate';
+import { TagDb } from '../tagdb/TagDb';
+import { TagSuggestionPanel } from './TagSuggestionPanel';
 import { FilterDao } from '../db/dao/FilterDao';
 import { DbHelper } from '../db/DbHelper';
 import { Filter } from '../model/Filter';
@@ -58,6 +62,11 @@ function langSelectOptions(): SelectOption[] {
 const SEARCH_ROW_H: number = 52;
 /** 收起态筛选摘要行高度（vp）。 */
 const SUMMARY_ROW_H: number = 40;
+
+/** 中文联想防抖（ms）：中文输入法上屏一个字的间隔量级；再短就会每敲一下全表扫一遍。 */
+const SUGGEST_DEBOUNCE_MS: number = 150;
+/** 一次取的候选数：面板内部可滚动，多取一些让「第 7 条以后」也能在面板里翻到（排序已在 `searchTags` 内完成）。 */
+const SUGGEST_FETCH_LIMIT: number = 20;
 
 /** 分类 chip 项（位值对照源 `EhConfig`；点亮 = 选中该分类 → 换算排除集发 `f_cats`；网站英文原文）。 */
 interface CatItem {
@@ -153,6 +162,22 @@ export struct SearchPage {
   private pageStack: NavPathStack | undefined = undefined;
   /** 搜索框控制器（官方收键盘手段：`SearchController.stopEditing()`；见 `search.d.ts:74`）。 */
   private searchController: SearchController = new SearchController();
+  /** 中文联想候选（`TagDb.search`；空 = 无候选，面板不渲染，避免空卡片）。 */
+  @Local suggestions: TagCandidate[] = [];
+  /** 产生这批候选时用的片段：选中时按它替换，不能按「点击当下」重算（期间输入可能已变）。 */
+  @Local suggestToken: TagToken | undefined = undefined;
+  /** 联想面板是否展开（`if` 的条件必须是可观察状态，见 `ui/AGENTS.md` #19）。 */
+  @Local suggestionsOpen: boolean = false;
+  /** 联想防抖定时器（`-1` = 没有待执行的回调）。 */
+  private suggestTimer: number = -1;
+
+  /**
+   * 页面被 pop：清掉待发的联想回调。
+   * 否则回调会在已销毁的组件上写 `@Local`，并白跑一次 4.4 万条的全表扫描。
+   */
+  aboutToDisappear(): void {
+    this.cancelSuggestTimer();
+  }
 
   private context(): common.Context {
     return this.getUIContext().getHostContext() as common.Context;
@@ -206,9 +231,10 @@ export struct SearchPage {
     return chips;
   }
 
-  /** 提交搜索（键盘回车 / 蓝「搜索」/ 快搜运行）：收键盘 + 收筛选 + 回顶，再重搜。 */
+  /** 提交搜索（键盘回车 / 蓝「搜索」/ 快搜运行）：收联想 + 收键盘 + 收筛选 + 回顶，再重搜。 */
   private submitSearch(): void {
     this.showQuickSearch = false;
+    this.closeSuggestions();
     this.searchController.stopEditing();
     if (this.filtersExpanded) {
       this.getUIContext().animateTo({ duration: 250, curve: Curve.EaseInOut }, () => {
@@ -217,6 +243,75 @@ export struct SearchPage {
       });
     }
     this.load(true);
+  }
+
+  /**
+   * 输入变化 → 防抖 150 ms 再查标签库。
+   * 每次输入先清旧定时器：中文输入法逐字上屏时会连发 `onChange`，
+   * 每次都全表扫 4.4 万条名字会拖慢输入。
+   */
+  private scheduleSuggest(value: string): void {
+    this.cancelSuggestTimer();
+    this.suggestTimer = setTimeout(() => {
+      this.runSuggest(value);
+    }, SUGGEST_DEBOUNCE_MS);
+  }
+
+  private cancelSuggestTimer(): void {
+    if (this.suggestTimer >= 0) {
+      clearTimeout(this.suggestTimer);
+      this.suggestTimer = -1;
+    }
+  }
+
+  /**
+   * 防抖到点：只在「最后一个片段含中日文」时给候选。
+   * 回调里不碰 `getUIContext()`（`ui/AGENTS.md` #26：脱离 UI 上下文会抛错）。
+   */
+  private runSuggest(value: string): void {
+    this.suggestTimer = -1;
+    // 等待期间用户又改了输入：这次结果已经过期，丢弃（否则会把上一个词的候选闪回面板）。
+    if (value !== this.query) {
+      return;
+    }
+    const token: TagToken | undefined = trailingCjkToken(value);
+    if (token === undefined) {
+      this.closeSuggestions();
+      return;
+    }
+    // 标签库未就绪 / 翻译开关关闭时 `TagDb.search` 返回 `[]` → 保持关闭，不显示空卡片。
+    const found: TagCandidate[] = TagDb.search(token.word, SUGGEST_FETCH_LIMIT);
+    if (found.length === 0) {
+      this.closeSuggestions();
+      return;
+    }
+    this.suggestions = found;
+    this.suggestToken = token;
+    this.suggestionsOpen = true;
+  }
+
+  private closeSuggestions(): void {
+    this.cancelSuggestTimer();
+    this.suggestionsOpen = false;
+    this.suggestions = [];
+    this.suggestToken = undefined;
+  }
+
+  /**
+   * 选中候选：只替换**产生这批候选时**那个片段（`ns:"tag$"` 精确语法），其余条件原样保留。
+   * 不能按点击当下重算片段：面板从出结果到点击之间用户可能又改了输入，
+   * 重算出的区间会指向另一个词（甚至把 chip 切换加上的 `-` 吞掉）。
+   * 不自动搜索——用户常常还要接着拼第二个标签；焦点留在框里、光标移到末尾，连续输入不中断。
+   */
+  private pickSuggestion(ns: string, tag: string): void {
+    const token: TagToken | undefined = this.suggestToken;
+    if (token === undefined) {
+      this.closeSuggestions();
+      return;
+    }
+    this.query = replaceRange(this.query, token.start, token.end, exactTagQuery(`${ns}:${tag}`));
+    this.searchController.caretPosition(this.query.length);
+    this.closeSuggestions();
   }
 
   /** 摘要 chip → 重新展开高级选项并回顶（与折叠互为反向动画）。 */
@@ -273,6 +368,8 @@ export struct SearchPage {
 
   /** 路由参数（含快搜运行带条件）→ 本页状态；缺字段回退默认。 */
   private applyParam(param: SearchParam): void {
+    // 换了一套查询条件：旧候选与它的片段区间不再对应新 query，必须一起收起。
+    this.closeSuggestions();
     this.query = param.query;
     this.kind = param.kind;
     this.pageTitle = param.title.length > 0 ? param.title : '搜索';
@@ -347,6 +444,8 @@ export struct SearchPage {
     }
     const token: string = tokens[index];
     tokens[index] = token.startsWith('-') ? token.substring(1) : `-${token}`;
+    // chip 直接改 query：联想候选与它的片段区间立刻作废（否则选中会按旧区间替换，把 `-` 吞掉）。
+    this.closeSuggestions();
     this.query = tokens.join(' ');
     this.load(true);
   }
@@ -357,6 +456,7 @@ export struct SearchPage {
       return;
     }
     tokens.splice(index, 1);
+    this.closeSuggestions();
     this.query = tokens.join(' ');
     this.load(true);
   }
@@ -530,9 +630,12 @@ export struct SearchPage {
           .searchButton('搜索')
           .onChange((value: string) => {
             this.query = value;
+            // 中文联想：纯英文/空串在 `runSuggest` 里被 `trailingCjkToken` 挡掉，不会弹面板。
+            this.scheduleSuggest(value);
           })
           .onSubmit((value: string) => {
             this.query = value;
+            this.closeSuggestions();
             this.submitSearch();
           })
         SymbolGlyph($r('sys.symbol.bookmark'))
@@ -975,6 +1078,10 @@ export struct SearchPage {
           .height('100%')
           .cachedCount(4)
           .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
+          // 上滑即收起联想：整块搜索区（含输入框）会随标题栏一起隐藏，面板留着就成了无主浮层。
+          .onScrollStart(() => {
+            this.closeSuggestions();
+          })
         }
         .onRefreshing(() => { this.searchController.stopEditing(); this.load(true); })
         .onOffsetChange((v: number) => { this.pullOffset = v; })
@@ -988,6 +1095,23 @@ export struct SearchPage {
           isRefreshing: this.isRefreshing,
           top: this.contentTop + 4
         })
+        // 中文联想面板：同一 `Stack` 内、内容起始线之下，只占自身高度（不铺满 → 不吞下层手势，#21）。
+        // **不能**塞进标题栏 `bottomBuilder`：那里的高度是固定的 `headerHeight`，同时喂给 `contentTop`
+        // 与刷新圈位置，撑大它会一次算错三处布局（#38 / #51）。
+        if (this.suggestionsOpen) {
+          Column() {
+            TagSuggestionPanel({
+              items: this.suggestions,
+              onPick: (ns: string, tag: string) => {
+                this.pickSuggestion(ns, tag);
+              }
+            })
+          }
+          .width('100%')
+          .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+          .offset({ top: this.contentTop })
+          .transition(TransitionEffect.OPACITY.animation({ duration: 120, curve: Curve.EaseOut }))
+        }
         }
         .width('100%')
         .layoutWeight(1)
