@@ -48,6 +48,7 @@ import jumpStripTest from './ui/JumpStrip.test';
 import previewStripSourceTest from './ui/PreviewStripSource.test';
 import updateTest from './network/Update.test';
 import tagDbFormatTest from './tagdb/TagDbFormat.test';
+import tagDbConvertTest from './tagdb/TagDbConvert.test';
 import tagDbTest from './tagdb/TagDb.test';
 
 export default function testsuite() {
@@ -101,5 +102,6 @@ export default function testsuite() {
   previewStripSourceTest();
   updateTest();
   tagDbFormatTest();
+  tagDbConvertTest();
   tagDbTest();
 }

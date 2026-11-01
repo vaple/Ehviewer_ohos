@@ -13,7 +13,7 @@ import { AppSettings, displayModeToColorMode } from '../state/AppSettings';
 import { SessionState } from '../state/SessionState';
 import { WindowState } from '../state/WindowState';
 import { DownloadSettings, downloadSettings, clampConcurrency } from '../state/DownloadSettings';
-import { HdsListItemCard, HdsNavDestination, PrefixIcon, SuffixArrow, SuffixBadge, SuffixButton, SuffixSelect } from '@kit.UIDesignKit';
+import { HdsListItemCard, HdsNavDestination, PrefixIcon, SuffixArrow, SuffixBadge, SuffixButton, SuffixSelect, SuffixSwitch } from '@kit.UIDesignKit';
 import { CARD_GAP, CARD_RADIUS, PAGE_PADDING, SHEET_MATERIAL } from './Materials';
 import { TITLE_BAR_H } from './NavStyle';
 import { CacheManager } from '../service/CacheManager';
@@ -26,6 +26,10 @@ import { navTitleBarStyle } from './NavStyle';
 import { UpdateState, hasUpdate, updateState, updateSummary } from '../state/UpdateState';
 import { DownloadStart, UpdateManager } from '../service/UpdateManager';
 import { sharedDetailCache } from '../network/DetailCache';
+import { TagSettings } from '../state/TagSettings';
+import { TagDb, TagDbStatus, tagDbRev } from '../tagdb/TagDb';
+import { TagUpdateOutcome, updateTagDb } from '../service/TagDbUpdater';
+import { errorText } from '../common/ErrorText';
 
 const LOGIN_URL: string = 'https://forums.e-hentai.org/index.php?act=Login';
 
@@ -49,6 +53,19 @@ const THUMB_SIZE_LABELS: string[] = THUMB_SIZE_OPTIONS.map((o: ThumbSizeOption) 
 
 /** 显示模式选项（下标即 `AppSettings.displayMode`：0 跟随系统 / 1 浅色 / 2 深色）。 */
 const DISPLAY_MODE_LABELS: string[] = ['跟随系统', '浅色', '深色'];
+
+/** 条数按千分位分组（`44795` → `44,795`）。不用 `toLocaleString`：结果会随系统语言变，状态行不该漂。 */
+function formatTagCount(count: number): string {
+  const digits: string = `${count}`;
+  let out: string = '';
+  for (let i = 0; i < digits.length; i++) {
+    if (i > 0 && (digits.length - i) % 3 === 0) {
+      out += ',';
+    }
+    out += digits.charAt(i);
+  }
+  return out;
+}
 
 /** 通用输入行：父组件用 `!!` 双向绑定（`@Param value` + `@Event $value`）。 */
 @ComponentV2
@@ -117,6 +134,19 @@ export struct SettingsPage {
   private updateStateRef: UpdateState = updateState();
   /** 手动检查进行中（防重复点击）。 */
   @Local updateChecking: boolean = false;
+  /**
+   * 标签翻译开关。独立持久化类（key 见 `state/TagSettings.ets` 的注释）；
+   * `AppShell` 已用同一 key 连接过，`globalConnect` 返回同一个实例，这里只是拿到引用。
+   */
+  @Local tagSettings: TagSettings = PersistenceV2.globalConnect({
+    type: TagSettings,
+    key: 'TagSettings2',
+    defaultCreator: () => new TagSettings()
+  })!;
+  /** 标签翻译更新进行中（防重复点击 + 按钮文案）。 */
+  @Local tagUpdating: boolean = false;
+  /** 本次会话最近一次更新失败的人话（不持久化：重启后不该继续展示旧失败）。技术细节在日志里。 */
+  @Local tagUpdateError: string = '';
 
   private context(): common.Context {
     return this.getUIContext().getHostContext() as common.Context;
@@ -416,6 +446,40 @@ export struct SettingsPage {
     }
   }
 
+  /** 状态行文案：开关关闭时 `status()` 是 undefined，必须显示「已关闭」而不是上一份快照。 */
+  private tagStatusText(): string {
+    if (!this.tagSettings.enabled) {
+      return '已关闭';
+    }
+    const status: TagDbStatus | undefined = TagDb.status();
+    if (status === undefined) {
+      return '加载中…';
+    }
+    const label: string = status.source === 'bundled' ? '内置快照' : '已更新';
+    // `builtAt` 是 ISO8601 UTC，日期部分直接截取（不做时区换算：它就是数据生成那天的 UTC 日期）。
+    return `${label} · ${status.builtAt.substring(0, 10)} · ${formatTagCount(status.count)} 条`;
+  }
+
+  /** 手动更新标签翻译：下载 → 转换 → 校验 → 原子写盘 → 重新加载，全程在 `TagDbUpdater` 里。 */
+  private async updateTagTranslations(): Promise<void> {
+    if (this.tagUpdating) {
+      return;
+    }
+    this.tagUpdating = true;
+    this.tagUpdateError = '';
+    try {
+      const outcome: TagUpdateOutcome = await updateTagDb(this.context());
+      promptAction.showToast({ message: outcome === 'UP_TO_DATE' ? '已是最新' : '标签翻译已更新' });
+    } catch (e) {
+      // `TagDbUpdater` 已把原始异常记进日志；这里的 `e` 是它换好的人话。
+      Logger.error('TagDb', `manual update failed: ${e}`);
+      this.tagUpdateError = errorText(e);
+      promptAction.showToast({ message: this.tagUpdateError });
+    } finally {
+      this.tagUpdating = false;
+    }
+  }
+
   /** 「下载」：系统保存面板 → 交给系统下载服务；取消不报错。 */
   private async downloadUpdate(): Promise<void> {
     const result: DownloadStart = await UpdateManager.pickAndStart(this.context());
@@ -613,6 +677,39 @@ export struct SettingsPage {
           Column({ space: 6 }) {
             // 顶部避让放进滚动内容：内容能钻到标题栏下，渐变模糊才有东西可糊。
             Column().height(this.windowState.safeTop + TITLE_BAR_H + 16)
+            SubHeaderV2({ title: new SubHeaderV2Title({ primaryTitle: '账号' }) })
+            HdsListItemCard({
+              prefixItem: new PrefixIcon({ iconValue: { symbol: $r('sys.symbol.person') } }),
+              textItem: {
+                primaryText: { text: this.session.loggedIn ? '已登录' : '未登录' },
+                secondaryText: { text: this.session.loggedIn ? 'Cookie 有效' : '用 Web 登录或手动填 Cookie' }
+              },
+              suffixItem: new SuffixArrow(),
+              onClick: () => { this.showWeb = true; }
+            })
+            Text('账号密码直登会被站点拦截，请用 Web 登录或手动 Cookie。')
+              .fontSize(12)
+              .fontColor($r('app.color.text_secondary'))
+              .width('100%')
+              .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+              .margin({ bottom: CARD_GAP })
+            HdsListItemCard({
+              textItem: {
+                primaryText: { text: '导出 Cookie' },
+                secondaryText: { text: '复制到剪贴板' }
+              },
+              suffixItem: new SuffixArrow(),
+              onClick: () => { this.exportCookies(); }
+            })
+            HdsListItemCard({
+              textItem: {
+                primaryText: { text: '导入 Cookie' },
+                secondaryText: { text: '从浏览器复制后整段粘贴' }
+              },
+              suffixItem: new SuffixArrow(),
+              onClick: () => { this.openSheet(1); }
+            })
+
             SubHeaderV2({ title: new SubHeaderV2Title({ primaryTitle: '站点' }) })
             HdsListItemCard({
               textItem: {
@@ -666,6 +763,49 @@ export struct SettingsPage {
               })
             })
 
+            SubHeaderV2({ title: new SubHeaderV2Title({ primaryTitle: '标签翻译' }) })
+            HdsListItemCard({
+              textItem: {
+                primaryText: { text: '显示中文标签' },
+                secondaryText: { text: '标签、命名空间与搜索候选都用中文；关闭会释放快照内存' }
+              },
+              suffixItem: new SuffixSwitch({
+                isCheck: this.tagSettings.enabled,
+                onChange: (isOn: boolean) => {
+                  // 逐属性赋值：`enabled` 的 setter 会推送变化（关 → 释放数据，开 → 重新载入）。
+                  this.tagSettings.enabled = isOn;
+                  // 本页状态行读的是 `status()`，它也依赖 `rev`；开关切换后立即重算，不用等异步载入。
+                  tagDbRev.rev++;
+                }
+              })
+            })
+            HdsListItemCard({
+              textItem: {
+                primaryText: { text: '数据状态' },
+                secondaryText: { text: this.tagStatusText() }
+              }
+            })
+            HdsListItemCard({
+              textItem: {
+                primaryText: { text: '翻译数据' },
+                secondaryText: { text: '从 EhTagTranslation 下载最新词条（约 4 MB）' }
+              },
+              suffixItem: new SuffixButton({
+                text: this.tagUpdating ? '更新中…' : '更新标签翻译',
+                // 开关关着时不写盘：写进去也不会加载（`reload` 会直接返回空数据），只会被当成失败。
+                enable: this.tagSettings.enabled && !this.tagUpdating,
+                onClick: () => { this.updateTagTranslations(); }
+              })
+            })
+            if (this.tagUpdateError.length > 0) {
+              Text(`上次更新失败：${this.tagUpdateError}`)
+                .fontSize(12)
+                .fontColor($r('app.color.danger'))
+                .width('100%')
+                .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+                .margin({ bottom: CARD_GAP })
+            }
+
             SubHeaderV2({ title: new SubHeaderV2Title({ primaryTitle: '阅读' }) })
             // 预加载窗口：0–10 可调（前向/后向各一个滑块）；阅读器取 `AppSettings` 的实时值。
             Column() {
@@ -685,6 +825,28 @@ export struct SettingsPage {
             .width('100%')
             .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
             .margin({ bottom: CARD_GAP })
+
+            SubHeaderV2({ title: new SubHeaderV2Title({ primaryTitle: '下载' }) })
+            HdsListItemCard({
+              textItem: {
+                primaryText: { text: '同时下载页数' },
+                secondaryText: { text: '越大越快，也更容易触发站点限流（1–4）' }
+              },
+              suffixItem: new SuffixSelect({
+                value: `${this.dlSettings.concurrency}`,
+                optionValues: ['1', '2', '3', '4'],
+                optionSymbol: [],
+                onSelect: (index: number, _text: string) => {
+                  this.dlSettings.concurrency = clampConcurrency(index + 1);
+                }
+              })
+            })
+            Text('下载只保存在应用内（不会出现在系统相册）；阅读时优先用已下载的图片。')
+              .fontSize(12)
+              .fontColor($r('app.color.text_secondary'))
+              .width('100%')
+              .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+              .margin({ bottom: CARD_GAP })
 
             SubHeaderV2({ title: new SubHeaderV2Title({ primaryTitle: '存储' }) })
             // 缓存统计/清理：官方 `storageStatistics` + 清 `cacheDir`（模块级 + 应用级）。
@@ -710,61 +872,6 @@ export struct SettingsPage {
               .width('100%')
               .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
               .margin({ bottom: CARD_GAP })
-
-            SubHeaderV2({ title: new SubHeaderV2Title({ primaryTitle: '下载' }) })
-            HdsListItemCard({
-              textItem: {
-                primaryText: { text: '同时下载页数' },
-                secondaryText: { text: '越大越快，也更容易触发站点限流（1–4）' }
-              },
-              suffixItem: new SuffixSelect({
-                value: `${this.dlSettings.concurrency}`,
-                optionValues: ['1', '2', '3', '4'],
-                optionSymbol: [],
-                onSelect: (index: number, _text: string) => {
-                  this.dlSettings.concurrency = clampConcurrency(index + 1);
-                }
-              })
-            })
-            Text('下载只保存在应用内（不会出现在系统相册）；阅读时优先用已下载的图片。')
-              .fontSize(12)
-              .fontColor($r('app.color.text_secondary'))
-              .width('100%')
-              .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
-              .margin({ bottom: CARD_GAP })
-
-            SubHeaderV2({ title: new SubHeaderV2Title({ primaryTitle: '登录' }) })
-            HdsListItemCard({
-              prefixItem: new PrefixIcon({ iconValue: { symbol: $r('sys.symbol.person') } }),
-              textItem: {
-                primaryText: { text: this.session.loggedIn ? '已登录' : '未登录' },
-                secondaryText: { text: this.session.loggedIn ? 'Cookie 有效' : '用 Web 登录或手动填 Cookie' }
-              },
-              suffixItem: new SuffixArrow(),
-              onClick: () => { this.showWeb = true; }
-            })
-            Text('账号密码直登会被站点拦截，请用 Web 登录或手动 Cookie。')
-              .fontSize(12)
-              .fontColor($r('app.color.text_secondary'))
-              .width('100%')
-              .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
-              .margin({ bottom: CARD_GAP })
-            HdsListItemCard({
-              textItem: {
-                primaryText: { text: '导出 Cookie' },
-                secondaryText: { text: '复制到剪贴板' }
-              },
-              suffixItem: new SuffixArrow(),
-              onClick: () => { this.exportCookies(); }
-            })
-            HdsListItemCard({
-              textItem: {
-                primaryText: { text: '导入 Cookie' },
-                secondaryText: { text: '从浏览器复制后整段粘贴' }
-              },
-              suffixItem: new SuffixArrow(),
-              onClick: () => { this.openSheet(1); }
-            })
 
             SubHeaderV2({ title: new SubHeaderV2Title({ primaryTitle: '高级设置' }) })
             HdsListItemCard({
@@ -808,6 +915,16 @@ export struct SettingsPage {
                 .width('100%')
             }
 
+            SubHeaderV2({ title: new SubHeaderV2Title({ primaryTitle: '诊断' }) })
+            HdsListItemCard({
+              textItem: {
+                primaryText: { text: '诊断日志' },
+                secondaryText: { text: this.diagText }
+              },
+              suffixItem: new SuffixArrow(),
+              onClick: () => { this.openSheet(2); }
+            })
+
             SubHeaderV2({ title: new SubHeaderV2Title({ primaryTitle: '关于' }) })
             HdsListItemCard({
               textItem: {
@@ -848,11 +965,14 @@ export struct SettingsPage {
             })
             HdsListItemCard({
               textItem: {
-                primaryText: { text: '诊断日志' },
-                secondaryText: { text: this.diagText }
+                primaryText: { text: '标签翻译数据' },
+                secondaryText: { text: 'EhTagTranslation · GFDL / CC BY-NC-SA 3.0' }
               },
-              suffixItem: new SuffixArrow(),
-              onClick: () => { this.openSheet(2); }
+              // 上游数据以 GFDL / CC BY-NC-SA 3.0 分发：仓库开源、hap 随包带快照，署名必须能在这里点开。
+              suffixItem: new SuffixArrow({ color: $r('app.color.text_secondary') }),
+              onClick: () => {
+                this.openUrl('https://github.com/EhTagTranslation/Database');
+              }
             })
           }
           .width('100%')

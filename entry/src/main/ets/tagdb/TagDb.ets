@@ -4,6 +4,7 @@ import { util } from '@kit.ArkTS';
 import { Logger } from '../common/Logger';
 import { TagSettings, watchTagEnabled } from '../state/TagSettings';
 import { TagCandidate } from './TagCandidate';
+import { describeError } from './ErrorDescribe';
 import {
   introOf, parseTagDb, peekFormat, searchTags, TAGDB_FORMAT, TagDbData, translateNsOf, translateTagOf
 } from './TagDbFormat';
@@ -81,7 +82,11 @@ export class TagDb {
     });
   }
 
-  private static enabled(): boolean {
+  /**
+   * 开关当前是否开启（未绑定设置时按开启处理）。公开是因为更新流程要判断「下载期间用户关掉了开关」：
+   * 那种情况写盘已经成功，但 `reload` 会释放数据，不能按失败上报。
+   */
+  static enabled(): boolean {
     const settings: TagSettings | undefined = TagDb.settings;
     return settings === undefined || settings.enabled;
   }
@@ -325,18 +330,3 @@ export class TagDb {
   }
 }
 
-/** 平台错误（`BusinessError`）的 `code` 与 `message`；只声明用得到的字段，不必把 kit 类型拖进日志工具。 */
-interface CodedError {
-  code?: number;
-  message?: string;
-}
-
-/**
- * 日志用的一行错误文本。
- * 不能只看 `message`：平台 `BusinessError` 的关键信息在 `code` 上，否则只会得到 "load failed: undefined"。
- */
-function describeError(e: Object): string {
-  const coded: CodedError = e as CodedError;
-  const message: string = coded.message !== undefined && coded.message.length > 0 ? coded.message : `${e}`;
-  return coded.code === undefined ? message : `[${coded.code}] ${message}`;
-}
