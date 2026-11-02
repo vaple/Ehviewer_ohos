@@ -149,8 +149,8 @@ export default function searchQueryTest() {
     });
 
     it('exclusionQueryOf_quotes_phrases_and_namespaces', 0, () => {
-      const title: Filter = { id: 1, mode: 0, text: 'title:big breasts', enable: true };
-      expect(exclusionQueryOf([title], [])).assertEqual('-title:"big breasts"');
+      const title: Filter = { id: 1, mode: 0, text: 'title:sample tags', enable: true };
+      expect(exclusionQueryOf([title], [])).assertEqual('-title:"sample tags"');
       const up: Filter = { id: 2, mode: 0, text: 'uploader:John Doe', enable: true };
       expect(exclusionQueryOf([up], [])).assertEqual('-uploader:"John Doe"');
       const tag: Filter = { id: 3, mode: 0, text: 'parody:fairy tail', enable: true };

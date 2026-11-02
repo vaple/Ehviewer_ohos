@@ -270,6 +270,12 @@ export struct SearchPage {
    */
   private runSuggest(value: string): void {
     this.suggestTimer = -1;
+    // 只有关键词搜索吃标签候选：上传者 / 标签页的输入是名字或原始查询条件，选中会把 `ns:"tag$"` 写进去，
+    // `buildUrl` 再包一层引号 → 必然 0 结果。
+    if (this.kind !== 'keyword') {
+      this.closeSuggestions();
+      return;
+    }
     // 等待期间用户又改了输入：这次结果已经过期，丢弃（否则会把上一个词的候选闪回面板）。
     if (value !== this.query) {
       return;
@@ -306,6 +312,12 @@ export struct SearchPage {
   private pickSuggestion(ns: string, tag: string): void {
     const token: TagToken | undefined = this.suggestToken;
     if (token === undefined) {
+      this.closeSuggestions();
+      return;
+    }
+    // 候选与 `onChange` 之间隔着 150 ms 防抖：用户在这段时间里可能已改了文本，
+    // 旧区间指向的是别的词，照写会覆盖错误的字符。
+    if (this.query.substring(token.start, token.end) !== token.word) {
       this.closeSuggestions();
       return;
     }

@@ -8,9 +8,10 @@ import { describeError } from './ErrorDescribe';
 import {
   introOf, parseTagDb, peekFormat, searchTags, TAGDB_FORMAT, TagDbData, translateNsOf, translateTagOf
 } from './TagDbFormat';
+import { BUILTIN_BUILT_AT } from './TagDbBuiltin';
 
 /**
- * 标签翻译快照的运行期单例：加载（沙箱优先）/ 状态 / 重绘信号 / 查询入口。
+ * 标签翻译快照的运行期单例：加载（按生成时间取沙箱或内置）/ 状态 / 重绘信号 / 查询入口。
  *
  * 数据本身与解析规则全在 `TagDbFormat`（纯函数），这里只负责「从哪来、什么时候算就绪、开关怎么影响结果」。
  * 为什么要有独立的重绘信号 `tagDbRev`：译文不是 `@Param`，加载完成或切开关时只该重画 chip，
@@ -40,6 +41,32 @@ export interface TagDbStatus {
   count: number;
 }
 
+/** 选片结果：`data` 是胜出的那份，`source` 只用于设置页的状态文案。 */
+export interface TagDbPick {
+  data: TagDbData;
+  source: TagDbSource;
+}
+
+/**
+ * 两份快照都有效时取 `builtAt` 较新的那份（spec §7）。
+ *
+ * 为什么不能"沙箱能解析就用沙箱"：App 升级会带来更新的内置快照，而用户沙箱里可能躺着上一版
+ * （或很久以前手动更新过）的文件——只认沙箱会把翻译永久钉在旧数据上，状态行还会把旧日期说成「已更新」。
+ *
+ * 比较用字符串字典序：格式规定 `builtAt` 是定长 ISO8601 UTC（见 `TagDbConvert`），字典序即时间序。
+ * 相等时取沙箱：内容同源（`sha` 相同）时没必要换，也避免为一份更旧的内置数据重画界面。
+ */
+export function pickNewerSnapshot(sandbox: TagDbData | undefined,
+  bundled: TagDbData | undefined): TagDbPick | undefined {
+  if (sandbox === undefined) {
+    return bundled === undefined ? undefined : { data: bundled, source: 'bundled' };
+  }
+  if (bundled === undefined || sandbox.meta.builtAt >= bundled.meta.builtAt) {
+    return { data: sandbox, source: 'updated' };
+  }
+  return { data: bundled, source: 'bundled' };
+}
+
 export class TagDb {
   /** 未加载或开关关闭时必须是 `undefined`——关闭要真的释放 ≈8 MB，不能只靠查询时跳过。 */
   private static data: TagDbData | undefined = undefined;
@@ -50,6 +77,11 @@ export class TagDb {
   private static settings: TagSettings | undefined = undefined;
   /** 最近一次拿到的 Context：开关重新打开时要自己回读文件，不依赖页面再传一次。 */
   private static hostContext: common.Context | undefined = undefined;
+  /**
+   * 最近一次加载是否失败。`data === undefined` + 开关开着时界面必须能区分「还在加载」与「已经失败」，
+   * 否则状态行永远停在「加载中…」，用户不知道要看诊断日志。
+   */
+  private static loadFailed: boolean = false;
 
   // ---- 开关 ----
 
@@ -76,9 +108,11 @@ export class TagDb {
       // 还没装载过（AppShell 尚未 ensureLoaded）：没有数据要重建，等它来；这里读盘没有意义。
       return;
     }
-    // 监听回调不能 await；失败只记日志（数据为空时界面就是原文，不会假装成功）。
+    // 监听回调不能 await；失败只记日志（数据为空时界面就是原文，不会假装成功），但要置 `loadFailed`
+    // 让设置页能把「加载中…」换成失败提示。
     TagDb.reload(ctx).catch((e: Error): void => {
       Logger.error('TagDb', `reload after enable failed: ${describeError(e)}`);
+      TagDb.markFailed();
     });
   }
 
@@ -94,13 +128,14 @@ export class TagDb {
   // ---- 加载 ----
 
   /**
-   * 业务入口：确保数据可用。启动路径是 fire-and-forget，失败只记 error、不置 ready。
+   * 业务入口：确保数据可用。启动路径是 fire-and-forget，失败只记 error + 置 `loadFailed`、不置 ready。
    * 开关关闭时直接返回、**不读任何文件**。
    */
   static ensureLoaded(ctx: common.Context): Promise<void> {
     return TagDb.start(ctx, false).catch((e: Error): void => {
-      // 调用方不 await：吞掉 rejection 只为了让宿主不冒未处理拒绝，错误本身已进日志。
+      // 调用方不 await：吞掉 rejection 只为了让宿主不冒未处理拒绝，错误本身已进日志 + 状态位。
       Logger.error('TagDb', `load failed: ${describeError(e)}`);
+      TagDb.markFailed();
     });
   }
 
@@ -152,6 +187,22 @@ export class TagDb {
   static install(data: TagDbData, source: TagDbSource): void {
     TagDb.source = source;
     TagDb.data = TagDb.enabled() ? data : undefined;
+    TagDb.loadFailed = false;
+    tagDbRev.rev++;
+  }
+
+  /**
+   * 最近一次加载是否失败（设置页据此把「加载中…」换成失败提示）。
+   * 与其它查询入口一样首行读 `rev`：失败/成功都要让读到它的页面重算。
+   */
+  static hasFailed(): boolean {
+    tagDbRev.rev;
+    return TagDb.loadFailed;
+  }
+
+  /** 置失败位并 `rev++`：否则页面读 `status()` 时依赖的 `rev` 没变，会一直停在旧的「加载中…」。 */
+  private static markFailed(): void {
+    TagDb.loadFailed = true;
     tagDbRev.rev++;
   }
 
@@ -178,11 +229,15 @@ export class TagDb {
   }
 
   private static dropData(): void {
-    if (TagDb.data === undefined) {
-      return;
-    }
+    const hadData: boolean = TagDb.data !== undefined;
     TagDb.data = undefined;
-    tagDbRev.rev++;
+    // `loadFailed` 必须一起清掉：否则关→开时 `status()` 仍是 undefined，设置页会先显示上一轮的
+    // 「加载失败」，直到这次加载结束；用户看到的是一次莫名其妙的报错。
+    const wasFailed: boolean = TagDb.loadFailed;
+    TagDb.loadFailed = false;
+    if (hadData || wasFailed) {
+      tagDbRev.rev++;
+    }
   }
 
   /** 仅单测用：清空所有模块级状态（含开关订阅），让用例互不影响。 */
@@ -192,6 +247,7 @@ export class TagDb {
     TagDb.loading = undefined;
     TagDb.settings = undefined;
     TagDb.hostContext = undefined;
+    TagDb.loadFailed = false;
     watchTagEnabled(undefined);
   }
 
@@ -199,23 +255,27 @@ export class TagDb {
     // 先让出一拍：下面 `getRawFileContentSync` + 3.1 MB `parseTagDb` 全是同步的，
     // 在 `onAppear` 那一帧里做完会拖住首帧；让首帧先画出来再干重活。
     await TagDb.yieldTick();
-    // 两份候选各读各的：沙箱可能不存在，内置那份永远存在（除非构建事故）。
+    // 沙箱那份只要不比内置旧就直接装：内置的生成时间是编译期常量，比较不必先把内置读进来，
+    // 冷启动因此省掉一次 3.1 MB 解析。但「能解析」本身不是理由——App 升级后内置会比沙箱新（spec §7），
+    // 那种情况必须读内置并让两份比一次新旧，否则翻译会被旧沙箱永久钉住。
     const sandbox: TagDbData | undefined = await TagDb.readSandbox(ctx);
-    const bundled: TagDbData | undefined = TagDb.readBundled(ctx);
-
-    // `builtAt` 是 ISO8601 UTC（等长、同格式），字典序即时间序，不需要 Date 解析。
-    let pick: TagDbData | undefined = bundled;
-    let source: TagDbSource = 'bundled';
-    if (sandbox !== undefined && (bundled === undefined || sandbox.meta.builtAt > bundled.meta.builtAt)) {
-      pick = sandbox;
-      source = 'updated';
-    }
-    if (pick === undefined) {
-      Logger.info('TagDb', 'no usable snapshot');
+    if (sandbox !== undefined && sandbox.meta.builtAt >= BUILTIN_BUILT_AT) {
+      TagDb.install(sandbox, 'updated');
+      Logger.info('TagDb', `loaded updated snapshot: ${sandbox.keys.length} tags, built ${sandbox.meta.builtAt}`);
       return;
     }
-    TagDb.install(pick, source);
-    Logger.info('TagDb', `loaded ${source} snapshot: ${pick.keys.length} tags, built ${pick.meta.builtAt}`);
+    const bundled: TagDbData | undefined = TagDb.readBundled(ctx);
+    const pick: TagDbPick | undefined = pickNewerSnapshot(sandbox, bundled);
+    if (pick === undefined) {
+      // 两份都不可用（内置缺失 / 不是本格式）：不能当成"加载成功、只是没数据"，
+      // 否则设置页永远停在「加载中…」，用户没有任何线索去看诊断日志。
+      Logger.error('TagDb', 'no usable snapshot: bundled unusable and sandbox missing/invalid');
+      TagDb.markFailed();
+      return;
+    }
+    TagDb.install(pick.data, pick.source);
+    Logger.info('TagDb',
+      `loaded ${pick.source} snapshot: ${pick.data.keys.length} tags, built ${pick.data.meta.builtAt}`);
   }
 
   /**

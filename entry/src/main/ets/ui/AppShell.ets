@@ -59,7 +59,7 @@ export struct AppShell {
   /** 登录态（内存态；`SettingsPage` 写 Cookie 后置位，`MyPage` 读取展示）。 */
   private session: SessionState = AppStorageV2.connect(SessionState, () => new SessionState())!;
   /** 标签翻译开关（独立 key `TagSettings2`；不并进 `AppSettings`，见 `state/AGENTS.md` #24）。 */
-  @Local tagSettings: TagSettings = PersistenceV2.globalConnect({
+  private tagSettings: TagSettings = PersistenceV2.globalConnect({
     type: TagSettings,
     key: 'TagSettings2',
     defaultCreator: () => new TagSettings()

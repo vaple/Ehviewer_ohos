@@ -1,8 +1,6 @@
 /node_modules/
-# tools/ 默认是本机脚本；但 tagdb 生成脚本必须入库——产物 rawfile/tagdb.v1.tsv 会提交，
-# 没有脚本别人就复现不出来（也没法发版前更新快照）。
-/tools/*
-!/tools/tagdb/
+# tools/ 是本机专用脚本（设备验证采集器、签名检查）；随仓库分发的脚本一律放 scripts/。
+/tools/
 /oh_modules/
 /local.properties
 /.idea/
@@ -19,6 +17,11 @@
 **/.test/
 .cxx/
 /dist/
+
+# 标签翻译快照**不入库**：内容来自 EhTagTranslation（数万条露骨术语释义），入库会让镜像仓把整份
+# 内容当源码扫描。构建期由 scripts/tagdb/build_tagdb.py --ensure 自动生成（见 hvigorfile.ts 的 preBuild 钩子）；
+# 伴生的 TagDbBuiltin.ets 只有 sha/时间/条数，正常入库以保证 clone 后可编译。
+/entry/src/main/resources/rawfile/tagdb.v1.tsv
 
 /docs/*
 !/docs/screenshots/

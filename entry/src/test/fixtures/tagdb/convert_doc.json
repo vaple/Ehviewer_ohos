@@ -1,0 +1,25 @@
+{
+  "repo": "EhTagTranslation/Database",
+  "head": { "sha": "abcdef0123456789abcdef0123456789abcdef01" },
+  "version": 7,
+  "data": [
+    {
+      "namespace": "artist",
+      "frontMatters": { "name": "艺术家", "abbr": "a", "description": "画师" },
+      "data": {
+        "some artist": { "name": "某画师", "intro": "第一行\n第二行", "links": "" },
+        "aaa artist": { "name": "甲画师" },
+        "back\\slash tag": { "name": "反\\斜杠" }
+      }
+    },
+    {
+      "namespace": "female",
+      "frontMatters": { "name": "女性" },
+      "data": {
+        "sample tags": { "name": "示\t例", "intro": "" },
+        "empty name": { "name": "   ", "intro": "没有译名" },
+        "no name": { "intro": "也没有译名" }
+      }
+    }
+  ]
+}

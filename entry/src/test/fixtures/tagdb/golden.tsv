@@ -1,0 +1,12 @@
+#tagdb	1
+#source	abcdef0123456789abcdef0123456789abcdef01	2026-11-02T09:30:00Z
+#rows
+artist	艺术家
+female	女性
+#tags
+artist	aaa artist	甲画师
+artist	back\\slash tag	反\\斜杠
+artist	some artist	某画师
+female	sample tags	示\t例
+#intro
+artist	some artist	第一行\n第二行

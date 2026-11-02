@@ -44,8 +44,8 @@ const FORMAT_LINE: string = `#tagdb\t${TAGDB_FORMAT}`;
 const GIT_SHA: RegExp = /^[0-9a-f]{40}$/;
 
 /**
- * `#source` 的生成时间必须是**定长** ISO8601 UTC：加载器用字典序比较沙箱快照与内置快照的新鲜度，
- * 带毫秒或时区偏移都会让比较结果随书写形式漂移。Python 生成端用同一形状。
+ * `#source` 的生成时间必须是**定长** ISO8601 UTC：加载器把它与内置快照的 `BUILTIN_BUILT_AT`
+ * 按字典序比较来决定用哪份，带毫秒或时区偏移都会让比较结果随书写形式漂移。Python 生成端用同一形状。
  */
 const ISO_UTC_SECONDS: RegExp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 

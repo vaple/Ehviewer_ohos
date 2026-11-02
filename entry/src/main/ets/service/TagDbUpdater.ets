@@ -33,12 +33,39 @@ const NO_SPACE_CODE: number = 13900025;
 export type TagUpdateOutcome = 'UPDATED' | 'UP_TO_DATE';
 
 /**
+ * 并发闸门：设置页的 `tagUpdating` 是**页面实例**状态，下载最长 60 s，退出再进就能发起第二次更新；
+ * 两者写同一个 `.tmp`（截断/交错），最后 rename 出混合文件 → 加载器当成解析失败删掉，翻译悄悄退回内置。
+ * 因此在这里做模块级 single-flight，在飞时返回同一个 promise。
+ */
+let inflightUpdate: Promise<TagUpdateOutcome> | undefined = undefined;
+
+export function updateTagDb(ctx: common.Context): Promise<TagUpdateOutcome> {
+  const active: Promise<TagUpdateOutcome> | undefined = inflightUpdate;
+  if (active !== undefined) {
+    return active;
+  }
+  const started: Promise<TagUpdateOutcome> = runUpdate(ctx);
+  inflightUpdate = started;
+  // 成功或失败都要摘掉记录，否则下一次更新会永远拿到同一个已结算的 promise。
+  started.then((): void => {
+    if (inflightUpdate === started) {
+      inflightUpdate = undefined;
+    }
+  }, (): void => {
+    if (inflightUpdate === started) {
+      inflightUpdate = undefined;
+    }
+  });
+  return started;
+}
+
+/**
  * 下载 → 转换 → 校验 → 原子写盘 → 重新加载。失败抛错，磁盘上的旧快照保持原样。
  *
  * `UP_TO_DATE` 是唯一"成功但没写盘"的结果（sha 相同）；其余成功路径都会写盘并重新加载。
  * 开关在下载/加载期间被关掉不算失败：文件已经落盘，下次开启时会自动读到它。
  */
-export async function updateTagDb(ctx: common.Context): Promise<TagUpdateOutcome> {
+async function runUpdate(ctx: common.Context): Promise<TagUpdateOutcome> {
   // 4 MB 下载期间用户完全可以关掉开关；记录进入时的状态，只为了日志能说清"关掉"还是"本来就是关的"。
   const enabledAtStart: boolean = TagDb.enabled();
 
@@ -95,7 +122,7 @@ export async function updateTagDb(ctx: common.Context): Promise<TagUpdateOutcome
     Logger.error('TagDb', `update: reload failed: ${describeError(e as Object)}`);
     throw new Error('更新后加载失败，请重试');
   }
-  // `reload` 在"没有可用候选"时只记 info 并 resolve（旧数据保留）。文件已经写进去了，但翻译没生效，
+  // `reload` 在"没有可用候选"时只记日志 + 置失败位并 resolve（旧数据保留）。文件已经写进去了，但翻译没生效，
   // 这时候报成功就是假成功——必须按失败上报，让用户看到状态行没变成"已更新"。
   // 例外：开关恰好在 reload 期间被关掉（dropData 后 resolve），写盘本身是成功的，不能报失败。
   if (!TagDb.isReady()) {
@@ -106,13 +133,14 @@ export async function updateTagDb(ctx: common.Context): Promise<TagUpdateOutcome
     Logger.error('TagDb', `update: reload resolved without data (sha ${sha})`);
     throw new Error('更新后未能加载，请重试');
   }
-  // 光"有数据"不够：加载规则按 `builtAt` 字典序取较新的那份，设备时钟明显偏慢时刚写的新快照会输给内置
-  // 快照，状态行仍旧显示旧数据，而我们会报"已更新"。用实际生效的 sha 做最后一道对账。
+  // 光"有数据"不够：加载规则取 `builtAt` 较新的那份（spec §7）。设备时钟比内置快照的生成时间还早时，
+  // 刚写进去的新快照会输给内置那份，状态行显示的是旧数据，而我们会报"已更新"（写盘后内容被别的路径覆盖同理）。
+  // 用实际生效的 sha 做最后一道对账，对不上就按失败上报。
   const applied: TagDbStatus | undefined = TagDb.status();
   if (applied === undefined || applied.sha !== sha) {
     const shown: string = applied === undefined ? 'none' : `${applied.source}/${applied.sha}`;
     Logger.error('TagDb', `update: new snapshot not applied (expected ${sha}, got ${shown})`);
-    throw new Error('更新后数据未生效，请检查设备时间后重试');
+    throw new Error('更新后数据未生效，请重试');
   }
 
   Logger.info('TagDb', `update: applied ${sha} (${applied.count} tags)`);

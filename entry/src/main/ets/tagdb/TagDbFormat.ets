@@ -106,8 +106,8 @@ export function unescapeField(raw: string): string {
 /**
  * 解析整份快照。
  *
- * 校验的都是"错了之后二分/回退会静默给出错误结果"的东西：头格式、三段齐全、`#tags` 严格递增（含唯一）、
- * 每行列数。之所以用原始（未转义）key 校验递增：查询时比对的也是未转义 key，
+ * 校验的都是"错了之后二分/回退会静默给出错误结果"的东西：头格式、`#source` 存在、三段齐全且 `#tags` 非空、
+ * `#tags` 严格递增（含唯一）、每行列数。之所以用原始（未转义）key 校验递增：查询时比对的也是未转义 key，
  * 转义序与解码序在包含 TAB/LF 的极端值上会不一致，按转义序放行会让二分漏命中。
  */
 export function parseTagDb(text: string): TagDbData {
@@ -139,6 +139,7 @@ export function parseTagDb(text: string): TagDbData {
   const names: string[] = [];
   const introLines: string[] = [];
   let section: string = '';
+  let seenSource: boolean = false;
   let seenRows: boolean = false;
   let seenTags: boolean = false;
   let seenIntro: boolean = false;
@@ -158,6 +159,7 @@ export function parseTagDb(text: string): TagDbData {
           }
           sha = cols[1];
           builtAt = cols[2];
+          seenSource = true;
           section = '';
           break;
         case SEG_ROWS:
@@ -210,8 +212,17 @@ export function parseTagDb(text: string): TagDbData {
     }
   }
 
+  // `#source` 缺了也能解析的话，`sha` / `builtAt` 是空串：状态行会显示「内置快照 ·  · 44,795 条」，
+  // 更新流程的「是否已是最新」也失去依据——直接拒绝。
+  if (!seenSource) {
+    throw new Error('tagdb: 缺 #source 段');
+  }
   if (!seenRows || !seenTags || !seenIntro) {
     throw new Error('tagdb: #rows / #tags / #intro 三段必须齐全');
+  }
+  // 空 `#tags`（只有段头没有行）是"加载出来 0 条还不报错"的唯一来源：宁可让加载器删掉这份。
+  if (keys.length === 0) {
+    throw new Error('tagdb: #tags 段为空');
   }
 
   const meta: TagDbMeta = { format: format, sha: sha, builtAt: builtAt };
@@ -246,7 +257,7 @@ function indexOfKey(keys: string[], key: string): number {
 
 /**
  * 精确 `ns:tag`，未命中再试整串小写一次。
- * 为什么要有小写兜底：站点对标签值大小写不敏感（`Big Breasts` 与 `big breasts` 同一条），
+ * 为什么要有小写兜底：站点对标签值大小写不敏感（`Sample Tags` 与 `sample tags` 同一条），
  * 用户从网页复制来的串可能大小写不同，但快照里只存上游原文。
  */
 function lookupTagIndex(db: TagDbData, ns: string, tag: string): number {

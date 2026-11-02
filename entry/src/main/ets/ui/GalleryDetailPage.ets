@@ -722,6 +722,8 @@ export struct GalleryDetailPage {
       .width('100%')
       .layoutWeight(1)
       .scrollBar(BarState.Auto)
+      // 内容比视口矮时不要垂直居中：释义必须从第一行贴顶（同 `TagSuggestionPanel`）。
+      .align(Alignment.Top)
     }
     .width('100%')
     .height('100%')

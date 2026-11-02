@@ -4,8 +4,10 @@ import {
 } from '../../main/ets/tagdb/TagDbFormat';
 
 // 排序键 = ns + ':' + tag，必须严格递增：
-// artist:some artist < female:big breasts < female:sole female < female:unnamed tag
-// < male:big breasts < parody:some work
+// artist:some artist < female:alpha tag < female:sole female < female:unnamed tag
+// < male:alpha two < male:gamma tag < parody:some work
+//
+// 样本一律用中性词（"alpha / beta / 示例"），只验证解析与排序的机械行为，不承载真实标签内容。
 const FIXTURE: string =
   '#tagdb\t1\n' +
   '#source\tdeadbeef\t2026-11-01T00:00:00Z\n' +
@@ -17,13 +19,14 @@ const FIXTURE: string =
   'parody\t原作\n' +
   '#tags\n' +
   'artist\tsome artist\t某画师\n' +
-  'female\tbig breasts\t巨乳\n' +
+  'female\talpha tag\t阿尔法\n' +
   'female\tsole female\t单女\n' +
   'female\tunnamed tag\t未命名\n' +
-  'male\tbig breasts\t巨乳（男）\n' +
+  'male\talpha two\t阿尔法（男）\n' +
+  'male\tgamma tag\tPurple alpha\n' +
   'parody\tsome work\t某作品\n' +
   '#intro\n' +
-  'female\tbig breasts\t一般的大乳房。\\n\\n是超乳的前置标签。\n';
+  'female\talpha tag\t示例释义文本。\\n\\n第二段。\n';
 
 export default function tagDbFormatTest() {
   describe('TagDbFormat', () => {
@@ -35,7 +38,7 @@ export default function tagDbFormatTest() {
       const db = parseTagDb(FIXTURE);
       expect(db.meta.format).assertEqual(TAGDB_FORMAT);
       expect(db.meta.sha).assertEqual('deadbeef');
-      expect(db.keys.length).assertEqual(6);
+      expect(db.keys.length).assertEqual(7);
       expect(db.nsNames.get('female')).assertEqual('女性');
     });
     it('rejects_unsorted_tags', 0, () => {
@@ -59,7 +62,7 @@ export default function tagDbFormatTest() {
     });
     it('translates_and_falls_back_to_raw', 0, () => {
       const db = parseTagDb(FIXTURE);
-      expect(translateTagOf(db, 'female', 'big breasts')).assertEqual('巨乳');
+      expect(translateTagOf(db, 'female', 'alpha tag')).assertEqual('阿尔法');
       expect(translateTagOf(db, 'female', 'not in db')).assertEqual('not in db');
       expect(translateNsOf(db, 'parody')).assertEqual('原作');
       expect(translateNsOf(db, 'unknown')).assertEqual('unknown');
@@ -72,13 +75,13 @@ export default function tagDbFormatTest() {
     it('returns_empty_intro_when_absent', 0, () => {
       const db = parseTagDb(FIXTURE);
       expect(introOf(db, 'female', 'sole female')).assertEqual('');
-      expect(introOf(db, 'female', 'big breasts')).assertEqual('一般的大乳房。\n\n是超乳的前置标签。');
+      expect(introOf(db, 'female', 'alpha tag')).assertEqual('示例释义文本。\n\n第二段。');
     });
     it('ranks_exact_first_then_english_prefix', 0, () => {
       const db = parseTagDb(FIXTURE);
       const none = searchTags(db, '姐妹', 10);
       expect(none.length).assertEqual(0);
-      const exact = searchTags(db, '巨乳', 10);
+      const exact = searchTags(db, '阿尔法', 10);
       expect(exact.length).assertEqual(2);
       expect(exact[0].ns).assertEqual('female');   // 名字完全相等（score 0）排在名字前缀（score 1）之前
       const en = searchTags(db, 'sole', 10);
@@ -90,11 +93,22 @@ export default function tagDbFormatTest() {
       // 「某」命中「某画师」「某作品」两条，limit=1 时只回一条（证明截断生效）。
       expect(searchTags(db, '某', 1).length).assertEqual(1);
     });
+    it('ranks_name_contains_before_english_prefix', 0, () => {
+      const db = parseTagDb(FIXTURE);
+      // `Purple alpha` 是「名字包含 alpha、但不是前缀」（score 2）；`alpha tag` / `alpha two` 是
+      // 「英文 tag 以 alpha 开头」（score 3）。score 2 必须排在前面——即使 `Purple alpha` 比 `阿尔法` 长得多
+      // （长度只在同分时才比）。
+      const hits = searchTags(db, 'alpha', 10);
+      expect(hits.length).assertEqual(3);
+      expect(hits[0].tag).assertEqual('gamma tag');
+      expect(hits[1].tag).assertEqual('alpha tag');
+      expect(hits[2].tag).assertEqual('alpha two');
+    });
     // 以下是 brief 之外补的校验边界：解析器"该抛却没抛"时二分/回退会静默给错结果。
     it('rejects_duplicate_key', 0, () => {
       let threw = false;
       try {
-        parseTagDb(FIXTURE.replace('female\tsole female\t单女', 'female\tbig breasts\t巨乳2'));
+        parseTagDb(FIXTURE.replace('female\tsole female\t单女', 'female\talpha tag\t重复'));
       } catch (e) {
         threw = true;
       }
@@ -103,7 +117,34 @@ export default function tagDbFormatTest() {
     it('rejects_missing_segment', 0, () => {
       let threw = false;
       try {
-        parseTagDb(FIXTURE.replace('#intro\nfemale\tbig breasts\t一般的大乳房。\\n\\n是超乳的前置标签。\n', ''));
+        parseTagDb(FIXTURE.replace('#intro\nfemale\talpha tag\t示例释义文本。\\n\\n第二段。\n', ''));
+      } catch (e) {
+        threw = true;
+      }
+      expect(threw).assertTrue();
+    });
+    it('rejects_empty_tags_segment', 0, () => {
+      // 只有 `#tags` 段头、没有行 = 加载出 0 条却报"成功"（状态行「· 0 条」）。必须抛。
+      let threw = false;
+      try {
+        parseTagDb(FIXTURE.replace(
+          'artist\tsome artist\t某画师\n' +
+          'female\talpha tag\t阿尔法\n' +
+          'female\tsole female\t单女\n' +
+          'female\tunnamed tag\t未命名\n' +
+          'male\talpha two\t阿尔法（男）\n' +
+          'male\tgamma tag\tPurple alpha\n' +
+          'parody\tsome work\t某作品\n', ''));
+      } catch (e) {
+        threw = true;
+      }
+      expect(threw).assertTrue();
+    });
+    it('rejects_missing_source', 0, () => {
+      // 缺 `#source` 时 sha / builtAt 会是空串，状态行显示「内置快照 ·  · N 条」，更新判重也失去依据。
+      let threw = false;
+      try {
+        parseTagDb(FIXTURE.replace('#source\tdeadbeef\t2026-11-01T00:00:00Z\n', ''));
       } catch (e) {
         threw = true;
       }
@@ -121,7 +162,7 @@ export default function tagDbFormatTest() {
     });
     it('translates_case_insensitively', 0, () => {
       const db = parseTagDb(FIXTURE);
-      expect(translateTagOf(db, 'female', 'BIG BREASTS')).assertEqual('巨乳');
+      expect(translateTagOf(db, 'female', 'ALPHA TAG')).assertEqual('阿尔法');
     });
     it('searches_nothing_for_blank_keyword', 0, () => {
       const db = parseTagDb(FIXTURE);

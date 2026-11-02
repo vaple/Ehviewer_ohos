@@ -27,7 +27,7 @@ import { UpdateState, hasUpdate, updateState, updateSummary } from '../state/Upd
 import { DownloadStart, UpdateManager } from '../service/UpdateManager';
 import { sharedDetailCache } from '../network/DetailCache';
 import { TagSettings } from '../state/TagSettings';
-import { TagDb, TagDbStatus, tagDbRev } from '../tagdb/TagDb';
+import { TagDb, TagDbStatus } from '../tagdb/TagDb';
 import { TagUpdateOutcome, updateTagDb } from '../service/TagDbUpdater';
 import { errorText } from '../common/ErrorText';
 
@@ -453,7 +453,8 @@ export struct SettingsPage {
     }
     const status: TagDbStatus | undefined = TagDb.status();
     if (status === undefined) {
-      return '加载中…';
+      // 加载真的失败了就别再说「加载中…」：用户至少要知道去看诊断日志（按钮仍可点，点一次即重试）。
+      return TagDb.hasFailed() ? '加载失败，详见诊断日志' : '加载中…';
     }
     const label: string = status.source === 'bundled' ? '内置快照' : '已更新';
     // `builtAt` 是 ISO8601 UTC，日期部分直接截取（不做时区换算：它就是数据生成那天的 UTC 日期）。
@@ -773,9 +774,8 @@ export struct SettingsPage {
                 isCheck: this.tagSettings.enabled,
                 onChange: (isOn: boolean) => {
                   // 逐属性赋值：`enabled` 的 setter 会推送变化（关 → 释放数据，开 → 重新载入）。
+                  // 重绘信号由 `TagDb` 内部自增（`dropData` / `install`），页面不要再写第二个。
                   this.tagSettings.enabled = isOn;
-                  // 本页状态行读的是 `status()`，它也依赖 `rev`；开关切换后立即重算，不用等异步载入。
-                  tagDbRev.rev++;
                 }
               })
             })
@@ -791,7 +791,7 @@ export struct SettingsPage {
                 secondaryText: { text: '从 EhTagTranslation 下载最新词条（约 4 MB）' }
               },
               suffixItem: new SuffixButton({
-                text: this.tagUpdating ? '更新中…' : '更新标签翻译',
+                text: this.tagUpdating ? '更新中…' : '更新翻译',
                 // 开关关着时不写盘：写进去也不会加载（`reload` 会直接返回空数据），只会被当成失败。
                 enable: this.tagSettings.enabled && !this.tagUpdating,
                 onClick: () => { this.updateTagTranslations(); }
@@ -901,7 +901,7 @@ export struct SettingsPage {
               suffixItem: new SuffixArrow(),
               onClick: () => { this.openMySettings(); }
             })
-            Text('以上两项需登录，站内修改后返回自动同步。')
+            Text('以上三项需登录，站内修改后返回自动同步。')
               .fontSize(12)
               .fontColor($r('app.color.text_secondary'))
               .width('100%')

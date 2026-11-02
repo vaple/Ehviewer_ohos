@@ -1,76 +1,19 @@
 import { describe, it, expect } from '@ohos/hypium';
 import { dbJsonToTsv } from '../../main/ets/tagdb/TagDbConvert';
 import { introOf, parseTagDb, translateNsOf, translateTagOf, unescapeField, TagDbData } from '../../main/ets/tagdb/TagDbFormat';
+import { CONVERT_DOC_JSON, GOLDEN_BUILT_AT, GOLDEN_TSV } from '../fixtures/tagdb/golden';
 
 /**
  * `dbJsonToTsv` 的契约（spec §2.2）：产物必须能被 `parseTagDb` 原样接受，且转义/排序/丢弃规则与
  * `tools/tagdb/build_tagdb.py` 一致——否则内置快照没事、设备端更新后却写坏。
+ *
+ * 样本 JSON 与黄金 TSV 都在 `fixtures/tagdb/`：2 个命名空间；`some artist` 的 intro 含换行、
+ * `sample tags` 的译名含 TAB、`back\slash` 的译名含反斜杠；另外两条故意没有可用译名（空串 / 全空白），
+ * `links` / `description` 属于该丢弃的上游元数据。
  */
 
 const SHA: string = 'abcdef0123456789abcdef0123456789abcdef01';
 const BUILT_AT: string = '2026-11-02T09:30:00Z';
-
-/** 上游 JSON 的测试用类型：ArkTS 不允许无类型对象字面量，所以先声明形状再 `JSON.stringify`。 */
-interface EntryWire {
-  name?: string;
-  intro?: string;
-  links?: string;
-}
-
-interface FrontWire {
-  name?: string;
-  abbr?: string;
-  description?: string;
-}
-
-interface BlockWire {
-  namespace: string;
-  frontMatters: FrontWire;
-  data: Record<string, EntryWire>;
-}
-
-interface HeadWire {
-  sha?: string;
-}
-
-interface DocWire {
-  repo: string;
-  head: HeadWire;
-  version: number;
-  data: BlockWire[];
-}
-
-/**
- * 2 个命名空间；`some artist` 的 intro 含换行、`big breasts` 的译名含 TAB、`back\slash` 的译名含反斜杠；
- * 另外两条故意没有可用译名（空串 / 全空白），`links` / `description` 属于该丢弃的上游元数据。
- */
-const DOC: DocWire = {
-  repo: 'EhTagTranslation/Database',
-  head: { sha: SHA },
-  version: 7,
-  data: [
-    {
-      namespace: 'artist',
-      frontMatters: { name: '艺术家', abbr: 'a', description: '画师' },
-      data: {
-        'some artist': { name: '某画师', intro: '第一行\n第二行', links: '' },
-        'aaa artist': { name: '甲画师' },
-        'back\\slash tag': { name: '反\\斜杠' }
-      }
-    },
-    {
-      namespace: 'female',
-      frontMatters: { name: '女性' },
-      data: {
-        'big breasts': { name: '巨\t乳', intro: '' },
-        'empty name': { name: '   ', intro: '没有译名' },
-        'no name': { intro: '也没有译名' }
-      }
-    }
-  ]
-};
-
-const JSON_FIXTURE: string = JSON.stringify(DOC);
 
 /** 取某一段（含段头之后、下一个段头之前）的行。 */
 function linesOf(tsv: string, header: string): string[] {
@@ -93,7 +36,7 @@ function linesOf(tsv: string, header: string): string[] {
 export default function tagDbConvertTest() {
   describe('TagDbConvert', () => {
     it('emits_header_source_and_section_order', 0, () => {
-      const tsv: string = dbJsonToTsv(JSON_FIXTURE, BUILT_AT);
+      const tsv: string = dbJsonToTsv(CONVERT_DOC_JSON, BUILT_AT);
       expect(tsv.startsWith('#tagdb\t1\n')).assertTrue();
       const lines: string[] = tsv.split('\n');
       expect(lines[1]).assertEqual(`#source\t${SHA}\t${BUILT_AT}`);
@@ -112,14 +55,14 @@ export default function tagDbConvertTest() {
     });
 
     it('escapes_every_field_into_one_line', 0, () => {
-      const tsv: string = dbJsonToTsv(JSON_FIXTURE, BUILT_AT);
+      const tsv: string = dbJsonToTsv(CONVERT_DOC_JSON, BUILT_AT);
       // #tags 每行恰好 3 列 —— 译名里的 TAB 必须已转义，否则会多出一列。
       const tagLines: string[] = linesOf(tsv, '#tags');
       expect(tagLines.length).assertEqual(4);
       for (let i = 0; i < tagLines.length; i++) {
         expect(tagLines[i].split('\t').length).assertEqual(3);
       }
-      expect(tsv.indexOf('female\tbig breasts\t巨\\t乳') >= 0).assertTrue();
+      expect(tsv.indexOf('female\tsample tags\t示\\t例') >= 0).assertTrue();
       expect(tsv.indexOf('artist\tsome artist\t某画师') >= 0).assertTrue();
       // 换行落在 #intro 段，必须是字面 `\n` 而不是真的换行。
       const introLines: string[] = linesOf(tsv, '#intro');
@@ -128,7 +71,7 @@ export default function tagDbConvertTest() {
     });
 
     it('sorts_tags_by_key_regardless_of_json_order', 0, () => {
-      const tsv: string = dbJsonToTsv(JSON_FIXTURE, BUILT_AT);
+      const tsv: string = dbJsonToTsv(CONVERT_DOC_JSON, BUILT_AT);
       const keys: string[] = [];
       const tagLines: string[] = linesOf(tsv, '#tags');
       for (let i = 0; i < tagLines.length; i++) {
@@ -138,18 +81,18 @@ export default function tagDbConvertTest() {
       expect(keys[0]).assertEqual('artist:aaa artist');
       expect(keys[1]).assertEqual('artist:back\\slash tag');
       expect(keys[2]).assertEqual('artist:some artist');
-      expect(keys[3]).assertEqual('female:big breasts');
+      expect(keys[3]).assertEqual('female:sample tags');
     });
 
     it('roundtrips_through_parseTagDb', 0, () => {
-      const tsv: string = dbJsonToTsv(JSON_FIXTURE, BUILT_AT);
+      const tsv: string = dbJsonToTsv(CONVERT_DOC_JSON, BUILT_AT);
       const db: TagDbData = parseTagDb(tsv);
       expect(db.meta.sha).assertEqual(SHA);
       expect(db.meta.builtAt).assertEqual(BUILT_AT);
       expect(db.keys.length).assertEqual(4);
       expect(translateNsOf(db, 'artist')).assertEqual('艺术家');
       expect(translateNsOf(db, 'female')).assertEqual('女性');
-      expect(translateTagOf(db, 'female', 'big breasts')).assertEqual('巨\t乳');
+      expect(translateTagOf(db, 'female', 'sample tags')).assertEqual('示\t例');
       expect(translateTagOf(db, 'artist', 'back\\slash tag')).assertEqual('反\\斜杠');
       expect(introOf(db, 'artist', 'some artist')).assertEqual('第一行\n第二行');
       // 没有可用译名的条目必须整条丢弃（包括它的释义）：命中空串会把界面上的标签抹成空白。
@@ -159,7 +102,7 @@ export default function tagDbConvertTest() {
     });
 
     it('keeps_namespace_rows_in_upstream_order', 0, () => {
-      const tsv: string = dbJsonToTsv(JSON_FIXTURE, BUILT_AT);
+      const tsv: string = dbJsonToTsv(CONVERT_DOC_JSON, BUILT_AT);
       const rows: string[] = linesOf(tsv, '#rows');
       expect(rows.length).assertEqual(2);
       expect(rows[0]).assertEqual('artist\t艺术家');
@@ -247,10 +190,22 @@ export default function tagDbConvertTest() {
 
     it('formats_built_at_as_iso_utc_seconds', 0, () => {
       // 默认时间必须是定长 ISO8601 UTC（不带毫秒）：加载器按字典序比较新鲜度。
-      const tsv: string = dbJsonToTsv(JSON_FIXTURE);
+      const tsv: string = dbJsonToTsv(CONVERT_DOC_JSON);
       const source: string[] = tsv.split('\n')[1].split('\t');
       expect(source.length).assertEqual(3);
       expect(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(source[2])).assertTrue();
+    });
+
+    it('matches_python_generator_golden', 0, () => {
+      // Python 生成器（发版产物）与 ArkTS 转换器（设备端更新）是两套独立实现，规则必须逐字一致。
+      // 黄金样本由 `python scripts/tagdb/gen_golden.py` 从同一份 `fixtures/tagdb/convert_doc.json` 生成：
+      // 任一侧单独改了转义顺序 / 丢弃规则 / 排序键 / 段顺序，这条用例立刻变红。
+      expect(dbJsonToTsv(CONVERT_DOC_JSON, GOLDEN_BUILT_AT)).assertEqual(GOLDEN_TSV);
+      // 顺带确认黄金样本本身是可加载的（不是只对了个字符串）。
+      const db: TagDbData = parseTagDb(GOLDEN_TSV);
+      expect(db.meta.builtAt).assertEqual(GOLDEN_BUILT_AT);
+      expect(translateTagOf(db, 'female', 'sample tags')).assertEqual('示\t例');
+      expect(translateTagOf(db, 'artist', 'back\\slash tag')).assertEqual('反\\斜杠');
     });
   });
 }
