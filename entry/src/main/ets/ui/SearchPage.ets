@@ -13,7 +13,7 @@ import { WindowState } from '../state/WindowState';
 import { HdsNavDestination, HideMode } from '@kit.UIDesignKit';
 import { GalleryRow, GalleryRowItem, loadMissingThumbs, pushGalleryDetail } from './GalleryRow';
 import { fCatsMask, excludedFromSelected, encodeAdvance, ALL_CATS, languageQueryOf, SEARCH_LANGUAGES, exclusionQueryOf, SearchFilters, exactTagQuery } from '../search/SearchQuery';
-import { replaceRange, trailingCjkToken, TagToken } from '../search/TagInput';
+import { replaceRange, shouldSuggest, trailingToken, TagToken } from '../search/TagInput';
 import { TagCandidate } from '../tagdb/TagCandidate';
 import { TagDb } from '../tagdb/TagDb';
 import { TagSuggestionPanel } from './TagSuggestionPanel';
@@ -270,9 +270,10 @@ export struct SearchPage {
    */
   private runSuggest(value: string): void {
     this.suggestTimer = -1;
-    // 只有关键词搜索吃标签候选：上传者 / 标签页的输入是名字或原始查询条件，选中会把 `ns:"tag$"` 写进去，
-    // `buildUrl` 再包一层引号 → 必然 0 结果。
-    if (this.kind !== 'keyword') {
+    // 只有上传者搜索要屏蔽：它的 query 会被 `buildUrl` 包成 `uploader:"…"`，候选插入的 `ns:"tag$"`
+    // 会被再包一层引号 → 必然 0 结果。
+    // `tag` 模式（从详情页点标签进来）与 `keyword` 一样是**原样**拼进 `f_search`，所以联想必须照常可用。
+    if (this.kind === 'uploader') {
       this.closeSuggestions();
       return;
     }
@@ -280,8 +281,8 @@ export struct SearchPage {
     if (value !== this.query) {
       return;
     }
-    const token: TagToken | undefined = trailingCjkToken(value);
-    if (token === undefined) {
+    const token: TagToken | undefined = trailingToken(value);
+    if (token === undefined || !shouldSuggest(token.word)) {
       this.closeSuggestions();
       return;
     }
@@ -642,7 +643,7 @@ export struct SearchPage {
           .searchButton('搜索')
           .onChange((value: string) => {
             this.query = value;
-            // 中文联想：纯英文/空串在 `runSuggest` 里被 `trailingCjkToken` 挡掉，不会弹面板。
+            // 标签联想：中英文走同一条路；太短的片段（拉丁 <2 字符）在 `runSuggest` 里被挡掉。
             this.scheduleSuggest(value);
           })
           .onSubmit((value: string) => {

@@ -104,6 +104,24 @@ export default function tagDbFormatTest() {
       expect(hits[1].tag).assertEqual('alpha tag');
       expect(hits[2].tag).assertEqual('alpha two');
     });
+    it('ranks_english_prefix_by_tag_length_not_name_length', 0, () => {
+      // 英文场景（score 3）要按 **tag 长度** 排序：中文名长短与用户输入毫无关系。
+      // 两行的中文名长度 13 vs 2、tag 长度 7 vs 10 —— 旧规则（按名字长度）会把 `alpha beta` 排前面。
+      const fixture: string =
+        '#tagdb\t1\n' +
+        '#source\tcafe\t2026-11-01T00:00:00Z\n' +
+        '#rows\n' +
+        'female\t女性\n' +
+        '#tags\n' +
+        'female\talpha b\t这是一个非常非常长的中文名字\n' +
+        'female\talpha beta\t短名\n' +
+        '#intro\n';
+      const db = parseTagDb(fixture);
+      const hits = searchTags(db, 'alpha', 10);
+      expect(hits.length).assertEqual(2);
+      expect(hits[0].tag).assertEqual('alpha b');
+      expect(hits[1].tag).assertEqual('alpha beta');
+    });
     // 以下是 brief 之外补的校验边界：解析器"该抛却没抛"时二分/回退会静默给错结果。
     it('rejects_duplicate_key', 0, () => {
       let threw = false;

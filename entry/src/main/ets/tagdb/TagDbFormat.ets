@@ -329,14 +329,17 @@ interface ScoredKey {
 
 /**
  * 分数规则（spec §3）：名字全等 0 / 名字前缀 1 / 名字包含 2 / 英文 tag 前缀 3（大小写不敏感）。
- * 排序 `(score ↑, 名字长度 ↑, key ↑)`：同分优先短名（更贴近用户想找的那个），再按字典序保证稳定可预期。
+ * 排序 `(score ↑, 命中列长度 ↑, key ↑)`：同分优先短的那个（更贴近用户想找的），再按字典序保证稳定可预期。
+ *
+ * 长度取「用户真正在比对的那一列」：按中文名命中的看名字长度，按英文 tag 前缀命中的看 tag 长度——
+ * 后者用中文名长度排序毫无意义（`parody:blue archive` 的中文名可能很短，却排在 `parody:blue` 前面）。
  */
-function compareScored(a: ScoredKey, b: ScoredKey, names: string[]): number {
+function compareScored(a: ScoredKey, b: ScoredKey, names: string[], keys: string[]): number {
   if (a.score !== b.score) {
     return a.score - b.score;
   }
-  const la: number = names[a.index].length;
-  const lb: number = names[b.index].length;
+  const la: number = matchedLength(a, names, keys);
+  const lb: number = matchedLength(b, names, keys);
   if (la !== lb) {
     return la - lb;
   }
@@ -344,6 +347,15 @@ function compareScored(a: ScoredKey, b: ScoredKey, names: string[]): number {
     return 0;
   }
   return a.key < b.key ? -1 : 1;
+}
+
+/** 命中列的长度：score 3 是英文 tag，其余是中文名。 */
+function matchedLength(hit: ScoredKey, names: string[], keys: string[]): number {
+  if (hit.score !== 3) {
+    return names[hit.index].length;
+  }
+  const key: string = keys[hit.index];
+  return key.length - key.indexOf(':') - 1;
 }
 
 /** 联想：`kw` 为空（或 `limit <= 0`）直接空数组，其余按分数取前 `limit` 条。 */
@@ -375,7 +387,7 @@ export function searchTags(db: TagDbData, kw: string, limit: number): TagCandida
       hits.push(hit);
     }
   }
-  hits.sort((a: ScoredKey, b: ScoredKey): number => compareScored(a, b, db.names));
+  hits.sort((a: ScoredKey, b: ScoredKey): number => compareScored(a, b, db.names, db.keys));
   const count: number = Math.min(limit, hits.length);
   const out: TagCandidate[] = [];
   for (let i = 0; i < count; i++) {

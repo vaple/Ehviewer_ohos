@@ -9,7 +9,7 @@
  *
  * `BUILTIN_ETAG` 只被构建期用（条件请求判断上游有没有变），运行期从不读它。
  */
-export const BUILTIN_SHA: string = 'fdce7645a0270f1650b0f86158f9d9c045e9b504';
-export const BUILTIN_BUILT_AT: string = '2026-11-02T03:06:52Z';
-export const BUILTIN_COUNT: number = 44809;
-export const BUILTIN_ETAG: string = '"f541525c06992777f9a64b34edb811ad8f0600fac3045ca546caff5096c3a37a"';
+export const BUILTIN_SHA: string = '8e78b5f5098323be55cb283d5aa4cde023d9b19b';
+export const BUILTIN_BUILT_AT: string = '2026-11-02T13:10:32Z';
+export const BUILTIN_COUNT: number = 44815;
+export const BUILTIN_ETAG: string = '"64a0b003fa9bdfa0dfc6533f9a74ed755861ee903f76e462895655977c889ab0"';

@@ -36,18 +36,17 @@ function isBlank(ch: string): boolean {
 }
 
 /**
- * 取最后一个空白分隔、且含中日文的片段；没有则 `undefined`。
+ * 取最后一个空白分隔的片段（含中日文或拉丁文均可）；没有则 `undefined`。
  *
  * 末尾空白先跳过：用户敲完「示例标签␣」准备接下一个词时，候选不该刚出现就消失；
  * 返回的 `end` 仍指向词尾，所以替换只动词、不动那个空格。
- * 纯英文 / 纯空白一律 `undefined`——英文输入不需要中文联想（拼音另立需求）。
  *
  * 前导 `-` / `~` **不算片段的一部分**：它们是查询语法（排除 / OR），不是标签内容。
  * 让 `start` 跳过它们，选中的替换就只会动「示例标签」，`-` 原地留下（`-female:"sample tags$"`）；
  * 若把前缀包进片段，既会把 `-示例标签` 当关键词去标签库搜（一条都搜不到），
  * 又会在拼回 `ns:"tag$"` 时丢掉否定符（`exactTagQuery` 注释里的前缀保留约定也要求这样）。
  */
-export function trailingCjkToken(text: string): TagToken | undefined {
+export function trailingToken(text: string): TagToken | undefined {
   let end: number = text.length;
   while (end > 0 && isBlank(text.charAt(end - 1))) {
     end--;
@@ -59,12 +58,34 @@ export function trailingCjkToken(text: string): TagToken | undefined {
   if (start === end) {
     return undefined;
   }
+
+  // 英文 tag 本身常含空格（`big breasts`）：把前面同样是纯 ASCII 的片段一起并进来，
+  // 否则 `big b` 的关键词只有 `b`，前缀匹配永远够不到整个 tag。
+  // 遇到含中日文的片段就停——那已经是另一个标签，不该被并进来替换掉。
+  while (!hasCjk(text.substring(start, end))) {
+    let p: number = start;
+    while (p > 0 && isBlank(text.charAt(p - 1))) {
+      p--;
+    }
+    if (p === 0) {
+      break;
+    }
+    let q: number = p;
+    while (q > 0 && !isBlank(text.charAt(q - 1))) {
+      q--;
+    }
+    if (hasCjk(text.substring(q, p))) {
+      break;
+    }
+    start = q;
+  }
+
   const lead: string = text.charAt(start);
   if (lead === '-' || lead === '~') {
     start++;
   }
   const word: string = text.substring(start, end);
-  if (!hasCjk(word)) {
+  if (word.length === 0) {
     return undefined;
   }
   const token: TagToken = { start: start, end: end, word: word };
@@ -72,8 +93,19 @@ export function trailingCjkToken(text: string): TagToken | undefined {
 }
 
 /**
+ * 片段是否短到不值得弹候选。
+ *
+ * 中英文共用同一套切词与打分，只有这个下限按字符类别分：一个汉字/假名已经足够具体
+ * （`巨` 就能收窄到几十条），一个拉丁字母则几乎是全集（`a` 会命中几千条）。
+ * 这不是两套流程，只是同一条规则的参数。
+ */
+export function shouldSuggest(word: string): boolean {
+  return word.length >= (hasCjk(word) ? 1 : 2);
+}
+
+/**
  * 用 `replacement` 替换 `[start, end)`，其余原样保留。
- * 不做越界收敛：调用方拿的区间来自 `trailingCjkToken`，错位属于逻辑错误，应该暴露而不是静默吞掉。
+ * 不做越界收敛：调用方拿的区间来自 `trailingToken`，错位属于逻辑错误，应该暴露而不是静默吞掉。
  */
 export function replaceRange(text: string, start: number, end: number, replacement: string): string {
   return `${text.substring(0, start)}${replacement}${text.substring(end)}`;

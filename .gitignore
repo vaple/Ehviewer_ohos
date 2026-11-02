@@ -18,9 +18,7 @@
 .cxx/
 /dist/
 
-# 标签翻译快照**不入库**：内容来自 EhTagTranslation（数万条露骨术语释义），入库会让镜像仓把整份
-# 内容当源码扫描。构建期由 scripts/tagdb/build_tagdb.py --ensure 自动生成（见 hvigorfile.ts 的 preBuild 钩子）；
-# 伴生的 TagDbBuiltin.ets 只有 sha/时间/条数，正常入库以保证 clone 后可编译。
+# 标签翻译快照：构建期生成（scripts/tagdb/build_tagdb.py --ensure），不入库
 /entry/src/main/resources/rawfile/tagdb.v1.tsv
 
 /docs/*

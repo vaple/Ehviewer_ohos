@@ -4,7 +4,7 @@ import { execFileSync } from 'child_process';
 
 /**
  * 内置标签翻译快照（`entry/src/main/resources/rawfile/tagdb.v1.tsv`）**不入库**：
- * 它是数万条露骨术语的中文释义，入库会让 GitCode 等镜像仓把整份内容当源码扫描。
+ * 它是第三方词典数据（数万条标签与释义），入库会让 GitCode 等镜像仓把整份内容当源码扫描。
  * 改为构建期生成：脚本自己读本地快照的 `#source`，再对上游发一次条件请求（`If-None-Match`），
  * 内容没变时服务端回 304、几乎不传字节；变了才下 4.3 MB 重新生成。
  *
