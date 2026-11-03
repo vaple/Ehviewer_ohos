@@ -9,15 +9,11 @@ export class QuickSearchDao {
   static async insert(qs: QuickSearch): Promise<number> {
     const store: relationalStore.RdbStore = DbHelper.getStore();
     const values: relationalStore.ValuesBucket = {
-      'NAME': qs.name,
-      'MODE': qs.mode,
       'CATEGORY': qs.category,
       'KEYWORD': qs.keyword,
       'LANGUAGE': qs.language,
       'ADVANCE_SEARCH': qs.advanceSearch,
       'MIN_RATING': qs.minRating,
-      'PAGE_FROM': qs.pageFrom,
-      'PAGE_TO': qs.pageTo,
       'TIME': qs.time
     };
     return await store.insert(TABLE, values);
@@ -48,16 +44,12 @@ export class QuickSearchDao {
         const langIndex: number = resultSet.getColumnIndex('LANGUAGE');
         const row: QuickSearch = {
           id: resultSet.getLong(resultSet.getColumnIndex('_id')),
-          name: resultSet.getString(resultSet.getColumnIndex('NAME')),
-          mode: resultSet.getLong(resultSet.getColumnIndex('MODE')),
           category: resultSet.getLong(resultSet.getColumnIndex('CATEGORY')),
           keyword: resultSet.getString(resultSet.getColumnIndex('KEYWORD')),
           // v1 老行的 LANGUAGE 为 NULL（迁移新增列）→ 按空串处理。
           language: resultSet.isColumnNull(langIndex) ? '' : resultSet.getString(langIndex),
           advanceSearch: resultSet.getLong(resultSet.getColumnIndex('ADVANCE_SEARCH')),
           minRating: resultSet.getLong(resultSet.getColumnIndex('MIN_RATING')),
-          pageFrom: resultSet.getLong(resultSet.getColumnIndex('PAGE_FROM')),
-          pageTo: resultSet.getLong(resultSet.getColumnIndex('PAGE_TO')),
           time: resultSet.getLong(resultSet.getColumnIndex('TIME'))
         };
         rows.push(row);

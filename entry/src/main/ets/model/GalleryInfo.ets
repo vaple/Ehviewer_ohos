@@ -3,7 +3,6 @@ export interface GalleryInfo {
   gid: number;
   token: string;
   title: string;
-  titleJpn: string;
   thumb: string;
   category: number;
   posted: string;

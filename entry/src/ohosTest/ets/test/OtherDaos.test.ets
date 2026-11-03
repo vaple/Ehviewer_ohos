@@ -18,25 +18,22 @@ export default function otherDaosTest() {
       await DbHelper.init(await ctx());
       await QuickSearchDao.deleteAll();
       const qs: QuickSearch = {
-        id: 0, name: 'n', mode: 3, category: 2, keyword: 'kw', language: 'chinese',
-        advanceSearch: 1, minRating: 4, pageFrom: 10, pageTo: 20, time: 999
+        id: 0, category: 2, keyword: 'kw', language: 'chinese',
+        advanceSearch: 1, minRating: 4, time: 999
       };
       await QuickSearchDao.insert(qs);
       const all: QuickSearch[] = await QuickSearchDao.queryAll();
       expect(all.length).assertEqual(1);
-      expect(all[0].mode).assertEqual(3);
       expect(all[0].category).assertEqual(2);
       expect(all[0].language).assertEqual('chinese');
       expect(all[0].advanceSearch).assertEqual(1);
       expect(all[0].minRating).assertEqual(4);
-      expect(all[0].pageFrom).assertEqual(10);
-      expect(all[0].pageTo).assertEqual(20);
     });
 
     it('filter_add_query_toggle_delete', 0, async () => {
       await DbHelper.init(await ctx());
       await FilterDao.clear();
-      const f: Filter = { id: 0, mode: 1, text: 'lolicon', enable: true };
+      const f: Filter = { id: 0, text: 'lolicon', enable: true };
       const id: number = await FilterDao.add(f);
       expect(id > 0).assertTrue();
       const all: Filter[] = await FilterDao.queryAll();

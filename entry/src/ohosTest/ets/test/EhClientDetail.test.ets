@@ -21,7 +21,7 @@ export default function ehClientDetailTest() {
       await cookies.init(await ctx());
       const client: EhClient = new EhClient(new RcpHttpClient(), cookies, { cache: new DetailCache(25, 0) });
 
-      const list: GalleryInfo[] = await client.getGalleryList(EhSite.E, EhUrl.frontPage(EhSite.E));
+      const list: GalleryInfo[] = (await client.getGalleryList(EhSite.E, EhUrl.frontPage(EhSite.E))).items;
       expect(list.length > 0).assertTrue();
 
       const first: GalleryInfo = list[0];

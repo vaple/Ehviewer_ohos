@@ -1,8 +1,6 @@
 import { QuickSearch } from '../model/QuickSearch';
 import { SearchParam } from '../model/SearchParam';
-import {
-  decodeAdvance, selectedFromExcluded, ALL_CATS, searchKindOf, exactTagQuery
-} from './SearchQuery';
+import { decodeAdvance, selectedFromExcluded, ALL_CATS } from './SearchQuery';
 import { catLabel } from '../ui/CategoryStyle';
 
 /** 是否已存过同名关键词（大小写不敏感；去重存用）。 */
@@ -17,35 +15,18 @@ export function hasSavedKeyword(items: QuickSearch[], keyword: string): boolean 
 }
 
 /**
- * 快搜记录的 `keyword` → `f_search` 条件主体。
- *
- * `mode` 是老记录唯一能说明「这条查询当年是什么模式」的线索：1 = 上传者，恢复时**必须**
- * 补 `uploader:"…"` qualifier——裸名字会被当普通关键词，搜出一堆无关画廊。
- * 2 = 标签，归一到精确语法（修复前存的裸 `parody:blue archive` 再运行也仍是精确标签搜索）。
- * 0 原样返回：keyword 就是完整的查询串（含用户手写的 qualifier）。
- */
-function restoredQuery(keyword: string, mode: number): string {
-  if (mode === 1) {
-    return `uploader:"${keyword.trim()}"`;
-  }
-  if (mode === 2) {
-    return exactTagQuery(keyword);
-  }
-  return keyword;
-}
-
-/**
  * 快搜记录 → 搜索路由参数（含落库四条件；老记录 `category/advanceSearch` 为 0 即默认态）。
- * `kind` 仍按 `mode` 还原：保存侧用它在列表里区分来源；URL 只由 `queryText` 决定，不再有特殊拼接。
+ *
+ * `keyword` 存的就是**最终** `f_search` 主体，这里原样发出，不做任何语法改写。
+ * `kind` 恒为 `keyword`：`tag` 那条「精确入口不套屏蔽规则」只对**直接进入**成立，
+ * 存成快搜再跑就是一次普通搜索——同一条查询不该因为从哪个入口存而结果不同。
  * 纯函数，行为即断言。
  */
 export function quickSearchToParam(item: QuickSearch): SearchParam {
   const decoded = decodeAdvance(item.advanceSearch);
-  const kind = searchKindOf(item.mode);
   return {
-    query: restoredQuery(item.keyword, item.mode),
-    title: item.name,
-    kind: kind,
+    query: item.keyword.trim(),
+    kind: 'keyword',
     selectedBits: selectedFromExcluded(item.category, ALL_CATS),
     scopes: decoded.scopes,
     langFilter: decoded.langFilter,

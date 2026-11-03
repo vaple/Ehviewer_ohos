@@ -64,12 +64,6 @@ export class GalleryDetailParser {
     }
     const title: string = Html.text(gn[0]).trim();
 
-    let titleJpn: string = '';
-    const gj: HtmlNode[] = Html.select(root, '#gj');
-    if (gj.length > 0) {
-      titleJpn = Html.text(gj[0]).trim();
-    }
-
     let category: number = 0;
     const gdc: HtmlNode[] = Html.select(root, '#gdc');
     if (gdc.length > 0) {
@@ -145,7 +139,6 @@ export class GalleryDetailParser {
       gid: gid,
       token: token,
       title: title,
-      titleJpn: titleJpn,
       category: category,
       uploader: uploader,
       posted: '',

@@ -2,7 +2,6 @@
  * 搜索查询纯函数（源：`ListUrlBuilder.build` MODE_NORMAL / `EhConfig` 分类位）。
  * `fCatsMask` 取**排除位**的 OR（== 源 `(~selected) & ALL_CATEGORY`）；空数组 → 0（不发 `f_cats`）。
  */
-import { SearchKind } from '../model/SearchParam';
 import { Filter } from '../model/Filter';
 export function fCatsMask(excludedCategories: number[]): number {
   let mask: number = 0;
@@ -53,20 +52,6 @@ export const SEARCH_LANGUAGES: string[] = [
   'french', 'portuguese', 'thai', 'german', 'italian', 'vietnamese',
   'polish', 'hungarian', 'dutch'
 ];
-
-/**
- * 快搜 `mode` → 搜索 `kind`（0 keyword / 1 uploader / 2 tag；非法回 keyword）。
- * 保存侧见 `SearchPage.saveQuick`（按 kind 存 0/1/2）。
- */
-export function searchKindOf(mode: number): SearchKind {
-  if (mode === 1) {
-    return 'uploader';
-  }
-  if (mode === 2) {
-    return 'tag';
-  }
-  return 'keyword';
-}
 
 /** 语言 chip → `f_search` 片段（单选精确串；空 = 不过滤）。 */
 export function languageQueryOf(lang: string): string {

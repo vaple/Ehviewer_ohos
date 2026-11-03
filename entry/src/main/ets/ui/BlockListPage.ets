@@ -68,7 +68,7 @@ export struct BlockListPage {
     const text: string = qualifyTag(raw);
     try {
       await DbHelper.init(this.context());
-      await FilterDao.add({ id: 0, mode: 0, text: text, enable: true });
+      await FilterDao.add({ id: 0, text: text, enable: true });
       this.draft = '';
       await this.reload();
     } catch (e) {

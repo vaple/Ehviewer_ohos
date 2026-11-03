@@ -3,18 +3,18 @@ import { HistoryInfo } from '../../model/HistoryInfo';
 import { DbHelper } from '../DbHelper';
 
 const TABLE: string = 'HISTORY';
-const COLUMNS: string = 'GID,TOKEN,TITLE,TITLE_JPN,THUMB,CATEGORY,POSTED,UPLOADER,RATING,SIMPLE_LANGUAGE,MODE,TIME';
+const COLUMNS: string = 'GID,TOKEN,TITLE,THUMB,CATEGORY,POSTED,UPLOADER,RATING,SIMPLE_LANGUAGE,TIME,PAGES';
 
 /** `HISTORY` 表的 DAO（`GID` 为业务主键）。 */
 export class HistoryDao {
   static async put(info: HistoryInfo): Promise<void> {
     const store: relationalStore.RdbStore = DbHelper.getStore();
     const args: relationalStore.ValueType[] = [
-      info.gid, info.token, info.title, info.titleJpn, info.thumb, info.category,
-      info.posted, info.uploader, info.rating, info.simpleLanguage, info.mode, info.time
+      info.gid, info.token, info.title, info.thumb, info.category,
+      info.posted, info.uploader, info.rating, info.simpleLanguage, info.time, info.pages
     ];
     await store.executeSql(
-      `INSERT OR REPLACE INTO ${TABLE} (${COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, args);
+      `INSERT OR REPLACE INTO ${TABLE} (${COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, args);
   }
 
   static async queryAll(): Promise<HistoryInfo[]> {
@@ -28,15 +28,13 @@ export class HistoryDao {
           gid: resultSet.getLong(resultSet.getColumnIndex('GID')),
           token: resultSet.getString(resultSet.getColumnIndex('TOKEN')),
           title: resultSet.getString(resultSet.getColumnIndex('TITLE')),
-          titleJpn: resultSet.getString(resultSet.getColumnIndex('TITLE_JPN')),
           thumb: resultSet.getString(resultSet.getColumnIndex('THUMB')),
           category: resultSet.getLong(resultSet.getColumnIndex('CATEGORY')),
           posted: resultSet.getString(resultSet.getColumnIndex('POSTED')),
           uploader: resultSet.getString(resultSet.getColumnIndex('UPLOADER')),
           rating: resultSet.getDouble(resultSet.getColumnIndex('RATING')),
           simpleLanguage: resultSet.getString(resultSet.getColumnIndex('SIMPLE_LANGUAGE')),
-          pages: 0,
-          mode: resultSet.getLong(resultSet.getColumnIndex('MODE')),
+          pages: resultSet.getLong(resultSet.getColumnIndex('PAGES')),
           time: resultSet.getLong(resultSet.getColumnIndex('TIME'))
         };
         rows.push(row);

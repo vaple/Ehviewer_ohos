@@ -9,7 +9,6 @@ function info(gid: number): GalleryInfo {
     gid: gid,
     token: 'tok',
     title: `t${gid}`,
-    titleJpn: '',
     thumb: '',
     category: 0,
     posted: '',

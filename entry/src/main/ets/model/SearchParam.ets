@@ -1,9 +1,11 @@
-/** 搜索页路由参数（照 `DetailParam` 现例）。四条件可选：缺字段回退默认（老快搜记录无条件，只带 keyword）。 */
+/**
+ * 搜索页路由参数（照 `DetailParam` 现例）。四条件可选：缺字段回退默认（老快搜记录无条件，只带 keyword）。
+ * 不带标题：页面标题恒为「搜索」，条件本身由 chips 显示（标题再抄一遍查询串只会挤掉标题栏）。
+ */
 export type SearchKind = 'keyword' | 'uploader' | 'tag';
 
 export interface SearchParam {
   query: string;
-  title: string;
   kind: SearchKind;
   /** 点亮的分类位（正选语义；缺省 = 10 位全亮）。 */
   selectedBits?: number[];

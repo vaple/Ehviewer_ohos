@@ -9,7 +9,6 @@ export class FilterDao {
   static async add(filter: Filter): Promise<number> {
     const store: relationalStore.RdbStore = DbHelper.getStore();
     const values: relationalStore.ValuesBucket = {
-      'MODE': filter.mode,
       'TEXT': filter.text,
       'ENABLE': filter.enable ? 1 : 0
     };
@@ -19,13 +18,12 @@ export class FilterDao {
   static async queryAll(): Promise<Filter[]> {
     const store: relationalStore.RdbStore = DbHelper.getStore();
     const resultSet: relationalStore.ResultSet =
-      await store.querySql(`SELECT _id, MODE, TEXT, ENABLE FROM ${TABLE}`);
+      await store.querySql(`SELECT _id, TEXT, ENABLE FROM ${TABLE}`);
     const rows: Filter[] = [];
     try {
       while (resultSet.goToNextRow()) {
         const row: Filter = {
           id: resultSet.getLong(resultSet.getColumnIndex('_id')),
-          mode: resultSet.getLong(resultSet.getColumnIndex('MODE')),
           text: resultSet.getString(resultSet.getColumnIndex('TEXT')),
           enable: resultSet.getLong(resultSet.getColumnIndex('ENABLE')) !== 0
         };

@@ -16,16 +16,16 @@ export default function galleryDaosTest() {
       await DbHelper.init(await ctx());
       await HistoryDao.clear();
       const info: HistoryInfo = {
-        gid: 101, token: 'tok', title: 'Title', titleJpn: '', thumb: 'th',
+        gid: 101, token: 'tok', title: 'Title', thumb: 'th',
         category: 1, posted: '2024', uploader: 'up', rating: 4.5, simpleLanguage: 'EN',
-        pages: 0, mode: 2, time: 111
+        pages: 12, time: 111
       };
       await HistoryDao.put(info);
       const all: HistoryInfo[] = await HistoryDao.queryAll();
       expect(all.length).assertEqual(1);
       expect(all[0].gid).assertEqual(101);
       expect(all[0].title).assertEqual('Title');
-      expect(all[0].mode).assertEqual(2);
+      expect(all[0].pages).assertEqual(12);
       expect(all[0].time).assertEqual(111);
       await HistoryDao.delete(101);
       expect((await HistoryDao.queryAll()).length).assertEqual(0);
@@ -35,14 +35,14 @@ export default function galleryDaosTest() {
       await DbHelper.init(await ctx());
       await HistoryDao.clear();
       const first: HistoryInfo = {
-        gid: 404, token: 't1', title: 'First', titleJpn: '', thumb: '',
+        gid: 404, token: 't1', title: 'First', thumb: '',
         category: 0, posted: '', uploader: '', rating: 0, simpleLanguage: '',
-        pages: 0, mode: 0, time: 100
+        pages: 0, time: 100
       };
       const second: HistoryInfo = {
-        gid: 404, token: 't1', title: 'Second', titleJpn: '', thumb: '',
+        gid: 404, token: 't1', title: 'Second', thumb: '',
         category: 0, posted: '', uploader: '', rating: 0, simpleLanguage: '',
-        pages: 0, mode: 0, time: 200
+        pages: 0, time: 200
       };
       await HistoryDao.put(first);
       await HistoryDao.put(second);
@@ -57,9 +57,9 @@ export default function galleryDaosTest() {
       await HistoryDao.clear();
       for (let i = 0; i < 5; i++) {
         const info: HistoryInfo = {
-          gid: 900 + i, token: 't', title: `T${i}`, titleJpn: '', thumb: '',
+          gid: 900 + i, token: 't', title: `T${i}`, thumb: '',
           category: 0, posted: '', uploader: '', rating: 0, simpleLanguage: '',
-          pages: 0, mode: 0, time: 1000 + i
+          pages: 0, time: 1000 + i
         };
         await HistoryDao.put(info);
       }

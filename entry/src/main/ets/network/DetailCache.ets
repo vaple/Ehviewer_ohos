@@ -62,7 +62,6 @@ export class DetailCache {
       gid: d.gid,
       token: d.token,
       title: d.title,
-      titleJpn: d.titleJpn,
       category: d.category,
       uploader: d.uploader,
       posted: d.posted,

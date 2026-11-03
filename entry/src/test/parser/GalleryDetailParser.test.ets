@@ -13,7 +13,6 @@ export default function galleryDetailParserTest() {
       expect(d !== null).assertTrue();
       expect(d?.gid).assertEqual(4253086);
       expect(d?.title).assertEqual('[ValenAiart12] Nico [AI Generated]');
-      expect(d?.titleJpn).assertEqual('');
       expect(d?.category).assertEqual(CATEGORY_MISC);
       expect(d?.uploader).assertEqual('Joze julio');
       expect(d?.rating).assertEqual(2.61);

@@ -1,6 +1,6 @@
 import { describe, it, expect } from '@ohos/hypium';
 import { EhUrl, EhSite } from '../../main/ets/network/EhUrl';
-import { fCatsMask, excludedFromSelected, encodeAdvance, decodeAdvance, DecodedAdvance, selectedFromExcluded, ALL_CATS, languageQueryOf, searchKindOf, exclusionQueryOf, qualifyTag, exactTagQuery, SearchFilters } from '../../main/ets/search/SearchQuery';
+import { fCatsMask, excludedFromSelected, encodeAdvance, decodeAdvance, DecodedAdvance, selectedFromExcluded, ALL_CATS, languageQueryOf, exclusionQueryOf, qualifyTag, exactTagQuery, SearchFilters } from '../../main/ets/search/SearchQuery';
 import { Filter } from '../../main/ets/model/Filter';
 
 export default function searchQueryTest() {
@@ -141,29 +141,29 @@ export default function searchQueryTest() {
     });
 
     it('exclusionQueryOf_empty_single_multi', 0, () => {
-      const on: Filter = { id: 1, mode: 0, text: 'loli', enable: true };
-      const off: Filter = { id: 2, mode: 0, text: 'shota', enable: false };
+      const on: Filter = { id: 1, text: 'loli', enable: true };
+      const off: Filter = { id: 2, text: 'shota', enable: false };
       expect(exclusionQueryOf([], [])).assertEqual('');
       expect(exclusionQueryOf([off], [])).assertEqual('');
       expect(exclusionQueryOf([on], [])).assertEqual('-loli');
     });
 
     it('exclusionQueryOf_quotes_phrases_and_namespaces', 0, () => {
-      const title: Filter = { id: 1, mode: 0, text: 'title:sample tags', enable: true };
+      const title: Filter = { id: 1, text: 'title:sample tags', enable: true };
       expect(exclusionQueryOf([title], [])).assertEqual('-title:"sample tags"');
-      const up: Filter = { id: 2, mode: 0, text: 'uploader:John Doe', enable: true };
+      const up: Filter = { id: 2, text: 'uploader:John Doe', enable: true };
       expect(exclusionQueryOf([up], [])).assertEqual('-uploader:"John Doe"');
-      const tag: Filter = { id: 3, mode: 0, text: 'parody:fairy tail', enable: true };
+      const tag: Filter = { id: 3, text: 'parody:fairy tail', enable: true };
       expect(exclusionQueryOf([tag], [])).assertEqual('-parody:"fairy tail"');
     });
 
     it('exclusionQueryOf_ignores_and_caps_at_ten', 0, () => {
-      const a: Filter = { id: 1, mode: 0, text: 'a', enable: true };
-      const b: Filter = { id: 2, mode: 0, text: 'b', enable: true };
+      const a: Filter = { id: 1, text: 'a', enable: true };
+      const b: Filter = { id: 2, text: 'b', enable: true };
       expect(exclusionQueryOf([a, b], ['a'])).assertEqual('-b');
       const many: Filter[] = [];
       for (let i = 0; i < 12; i++) {
-        many.push({ id: i, mode: 0, text: `w${i}`, enable: true });
+        many.push({ id: i, text: `w${i}`, enable: true });
       }
       const out: string = exclusionQueryOf(many, []);
       expect(out.split(' ').length).assertEqual(10);
@@ -195,13 +195,6 @@ export default function searchQueryTest() {
       // 无命名空间不替用户猜。
       expect(exactTagQuery('blue archive')).assertEqual('blue archive');
       expect(exactTagQuery('  ')).assertEqual('');
-    });
-
-    it('searchKindOf_maps_mode_to_kind', 0, () => {
-      expect(searchKindOf(0)).assertEqual('keyword');
-      expect(searchKindOf(1)).assertEqual('uploader');
-      expect(searchKindOf(2)).assertEqual('tag');
-      expect(searchKindOf(9)).assertEqual('keyword');
     });
 
     it('encodeAdvance_roundtrip_scopes_and_lang', 0, () => {

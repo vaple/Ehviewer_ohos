@@ -1,7 +1,6 @@
-/** FILTER 表实体（「搜索排除」预设）。`mode` 决定拼接查询时的前缀：0 = title、1 = uploader、2 = tag。 */
+/** FILTER 表实体（「搜索排除」预设）。`text` 就是完整查询词（`title:…` / `-uploader:…` / `ns:"tag$"`）。 */
 export interface Filter {
   id: number;
-  mode: number;
   text: string;
   enable: boolean;
 }

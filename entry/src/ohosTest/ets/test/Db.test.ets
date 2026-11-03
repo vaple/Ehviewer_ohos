@@ -17,15 +17,14 @@ export default function dbTest() {
       await QuickSearchDao.deleteAll();
 
       const qs: QuickSearch = {
-        id: 0, name: 'name1', mode: 0, category: 0, keyword: 'kw1', language: '',
-        advanceSearch: 0, minRating: 0, pageFrom: -1, pageTo: -1, time: 123
+        id: 0, category: 0, keyword: 'kw1', language: '',
+        advanceSearch: 0, minRating: 0, time: 123
       };
       const rowId: number = await QuickSearchDao.insert(qs);
       expect(rowId > 0).assertTrue();
 
       const all: QuickSearch[] = await QuickSearchDao.queryAll();
       expect(all.length).assertEqual(1);
-      expect(all[0].name).assertEqual('name1');
       expect(all[0].keyword).assertEqual('kw1');
       expect(all[0].time).assertEqual(123);
     });

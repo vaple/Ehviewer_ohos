@@ -333,7 +333,7 @@ export struct GalleryDetailPage {
   private async addBlockRule(term: string): Promise<void> {
     try {
       await DbHelper.init(this.context());
-      const rule: Filter = { id: 0, mode: 0, text: qualifyTag(term), enable: true };
+      const rule: Filter = { id: 0, text: qualifyTag(term), enable: true };
       await FilterDao.add(rule);
       promptAction.showToast({ message: '已加入搜索排除' });
     } catch (e) {
@@ -347,7 +347,6 @@ export struct GalleryDetailPage {
     const raw: string = tagQueryOf(namespace, tag);
     const param: SearchParam = {
       query: `-${exactTagQuery(raw)}`,
-      title: `排除 ${raw}`,
       kind: 'keyword'
     };
     this.pageStack?.pushPathByName('搜索', param);
@@ -376,7 +375,6 @@ export struct GalleryDetailPage {
     const raw: string = tagQueryOf(namespace, tag);
     const param: SearchParam = {
       query: exactTagQuery(raw),
-      title: `标签 ${raw}`,
       kind: 'tag'
     };
     this.pageStack?.pushPathByName('搜索', param);
@@ -392,9 +390,9 @@ export struct GalleryDetailPage {
     }
     const lang: string = languageOf(langTags);
     const info: HistoryInfo = {
-      gid: d.gid, token: d.token, title: d.title, titleJpn: d.titleJpn, thumb: d.thumb,
+      gid: d.gid, token: d.token, title: d.title, thumb: d.thumb,
       category: d.category, posted: d.posted, uploader: d.uploader, rating: d.rating,
-      simpleLanguage: lang, pages: d.pages, mode: 0, time: Date.now()
+      simpleLanguage: lang, pages: d.pages, time: Date.now()
     };
     await HistoryDao.put(info);
     await HistoryDao.trimTo(200);
@@ -1116,7 +1114,6 @@ export struct GalleryDetailPage {
                     // 上传者不再是一种搜索模式：它就是一条 `uploader:"…"` 条件，进搜索页后是普通 chip。
                     const param: SearchParam = {
                       query: `uploader:"${this.uploader}"`,
-                      title: `上传者 ${this.uploader}`,
                       kind: 'keyword'
                     };
                     this.pageStack?.pushPathByName('搜索', param);

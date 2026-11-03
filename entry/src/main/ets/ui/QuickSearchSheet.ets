@@ -54,7 +54,7 @@ export struct QuickSearchSheet {
               HdsListItem({
                 hdsListItemCard: {
                   textItem: {
-                    primaryText: { text: ri.item.name },
+                    primaryText: { text: ri.item.keyword },
                     secondaryText: quickSearchSummary(ri.item).length > 0
                       ? { text: quickSearchSummary(ri.item) }
                       : undefined

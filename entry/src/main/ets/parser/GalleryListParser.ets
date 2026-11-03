@@ -188,11 +188,11 @@ export class GalleryListParser {
         }
       }
 
-      const tagLang: string = languageOf(tagTitles);      const info: GalleryInfo = {
+      const tagLang: string = languageOf(tagTitles);
+      const info: GalleryInfo = {
         gid: detail.gid,
         token: detail.token,
         title: title,
-        titleJpn: '',
         thumb: thumb,
         category: category,
         posted: posted,

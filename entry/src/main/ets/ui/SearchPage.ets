@@ -1,5 +1,5 @@
 import { common } from '@kit.AbilityKit';
-import { AppStorageV2, PersistenceV2, promptAction, ChipV2, ChipV2Label, ChipV2Options, ChipV2Size, ColorMetrics, LengthMetrics, SubHeaderV2, SubHeaderV2Title } from '@kit.ArkUI';
+import { AppStorageV2, PersistenceV2, promptAction, ChipV2, ChipV2Label, ChipV2Options, ChipV2Size, ColorMetrics, LengthMetrics, SubHeaderV2, SubHeaderV2Title, SymbolGlyphModifier } from '@kit.ArkUI';
 import { EhSite, EhUrl } from '../network/EhUrl';
 import { CookieStore } from '../network/CookieStore';
 import { RcpHttpClient } from '../network/RcpHttpClient';
@@ -12,7 +12,7 @@ import { Logger } from '../common/Logger';
 import { errorText } from '../common/ErrorText';
 import { AppSettings } from '../state/AppSettings';
 import { WindowState } from '../state/WindowState';
-import { HdsNavDestination, HideMode } from '@kit.UIDesignKit';
+import { HdsNavDestination, HideMode, HdsNavigationMenuItemOptions } from '@kit.UIDesignKit';
 import { GalleryRow, GalleryRowItem, loadMissingThumbs, pushGalleryDetail } from './GalleryRow';
 import { fCatsMask, excludedFromSelected, encodeAdvance, ALL_CATS, languageQueryOf, SEARCH_LANGUAGES, exclusionQueryOf, SearchFilters } from '../search/SearchQuery';
 import { shouldSuggest, trailingToken, TagToken } from '../search/TagInput';
@@ -142,7 +142,6 @@ export struct SearchPage {
   /** chip 行实测高度（vp；无 chip 时不渲染 → 0）。喂给 `headerHeight`，让内容避让自动跟随。 */
   @Local chipsHeight: number = 0;
   @Local kind: SearchKind = 'keyword';
-  @Local pageTitle: string = '搜索';
   @Local items: GalleryRowItem[] = [];
   @Local isRefreshing: boolean = false;
   /** 当前下拉距离（vp，来自 `Refresh.onOffsetChange`），只用于刷新圈的淡入。 */
@@ -415,13 +414,11 @@ export struct SearchPage {
       }
       await QuickSearchDao.insert({
         id: 0,
-        name: this.kind === 'keyword' ? keyword : (this.pageTitle.length > 0 ? this.pageTitle : keyword),
-        mode: this.kind === 'uploader' ? 1 : (this.kind === 'tag' ? 2 : 0),
         category: fCatsMask(excludedFromSelected(this.selectedBits, ALL_CATS)),
         keyword: keyword,
         language: this.selectedLang,
         advanceSearch: encodeAdvance(this.scopes, this.langFilter),
-        minRating: this.minRating, pageFrom: -1, pageTo: -1, time: Date.now()
+        minRating: this.minRating, time: Date.now()
       });
       promptAction.showToast({ message: '已存到快搜' });
     } catch (e) {
@@ -443,7 +440,6 @@ export struct SearchPage {
       this.chipsHeight = 0;
     }
     this.kind = param.kind;
-    this.pageTitle = param.title.length > 0 ? param.title : '搜索';
     // 单次排除是临时筛选（快搜记录不存）；语言 chip 现在随快搜落库，缺省清空。
     this.selectedLang = '';
     this.ignoredExclusions = [];
@@ -599,6 +595,31 @@ export struct SearchPage {
     return rule.text;
   }
 
+  /**
+   * 标题栏右侧菜单项（官方页面级动作槽位）。
+   *
+   * 图标必须走 `SymbolGlyphModifier`：`IconType` 的 `ResourceStr` 分支是**图片**资源，符号字体（`sys.symbol.*`）
+   * 在里面画不出来；`SymbolGlyphModifier(src)` 才是符号的正确入口。
+   * 颜色显式给 `text_primary`：HDS 默认着色不与 `navTitleBarStyle()` 的标题色同源，深色下会看不见。
+   */
+  private menuItem(symbol: Resource, label: string, action: () => void): HdsNavigationMenuItemOptions {
+    const icon: SymbolGlyphModifier = new SymbolGlyphModifier(symbol);
+    icon.fontColor([$r('app.color.text_primary')]);
+    return { content: { icon: icon, label: label, action: action } };
+  }
+
+  /** 快速搜索（存过的条件）与「存为快搜」：低频页面级动作，从搜索行挪到标题栏，把行宽还给输入框。 */
+  private titleMenus(): HdsNavigationMenuItemOptions[] {
+    return [
+      this.menuItem($r('sys.symbol.clock'), '快速搜索', () => {
+        this.showQuickSearch = true;
+      }),
+      this.menuItem($r('sys.symbol.bookmark'), '保存为快速搜索', () => {
+        this.saveQuick();
+      })
+    ];
+  }
+
   @Builder
   quickSearchSheet() {
     QuickSearchSheet({
@@ -611,21 +632,18 @@ export struct SearchPage {
     })
   }
 
-  /** 标题栏底部功能区：`clock | Search | ＋ | bookmark` 单行 + 已确认条件 chips；收起态追加筛选摘要行。 */
+  /**
+   * 标题栏底部功能区：`Search | ＋` 单行 + 已确认条件 chips；收起态追加筛选摘要行。
+   *
+   * 行内只留输入框与「＋」：三个 44vp 热区 + 3 个 8vp 间距会吃掉四成行宽（360vp 屏上输入区只剩 ~70vp，
+   * 占位文字被截成「输…」）。`clock`（快速搜索）与 `bookmark`（存为快搜）是页面级动作，
+   * 走标题栏官方菜单槽位（`titleBar.content.menu`），图形、热区与材质由 HDS 提供。
+   */
   @Builder
   headerArea() {
     Column() {
-      Row({ space: 8 }) {
-        SymbolGlyph($r('sys.symbol.clock'))
-          .fontSize(20)
-          .fontColor([$r('app.color.text_secondary')])
-          .width(TOUCH_MIN)
-          .height(TOUCH_MIN)
-          .padding(6)
-          .onClick(() => {
-            this.showQuickSearch = true;
-          })
-        Search({ value: this.draft, placeholder: '输入关键词或标签', controller: this.searchController })
+      Row({ space: 4 }) {
+        Search({ value: this.draft, placeholder: '关键词或标签', controller: this.searchController })
           .id(SEARCH_FIELD_ID)
           .layoutWeight(1)
           .searchButton('搜索')
@@ -656,15 +674,6 @@ export struct SearchPage {
             this.commitDraft();
             // 点图标会把焦点从 Search 拿走：补回来，用户接着输入下一个条件。
             this.getUIContext().getFocusController().requestFocus(SEARCH_FIELD_ID);
-          })
-        SymbolGlyph($r('sys.symbol.bookmark'))
-          .fontSize(18)
-          .fontColor([$r('app.color.text_secondary')])
-          .width(TOUCH_MIN)
-          .height(TOUCH_MIN)
-          .padding(4)
-          .onClick(() => {
-            this.saveQuick();
           })
       }
       .width('100%')
@@ -1179,7 +1188,8 @@ export struct SearchPage {
       avoidLayoutSafeArea: true,
       style: navTitleBarStyle(),
       content: {
-        title: { mainTitle: this.pageTitle },
+        title: { mainTitle: '搜索' },
+        menu: { value: this.titleMenus() },
         bottomBuilder: { builder: () => { this.headerArea() }, height: this.headerHeight }
       }
     })

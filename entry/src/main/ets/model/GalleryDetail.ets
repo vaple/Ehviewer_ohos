@@ -7,7 +7,6 @@ export interface GalleryDetail {
   gid: number;
   token: string;
   title: string;
-  titleJpn: string;
   category: number;
   uploader: string;
   posted: string;

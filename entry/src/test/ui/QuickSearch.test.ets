@@ -2,11 +2,12 @@ import { describe, it, expect } from '@ohos/hypium';
 import { hasSavedKeyword, quickSearchToParam, quickSearchSummary } from '../../main/ets/search/QuickSearchQuery';
 import { QuickSearch } from '../../main/ets/model/QuickSearch';
 import { ALL_CATS } from '../../main/ets/search/SearchQuery';
+import { joinQueryText, splitQueryTokens } from '../../main/ets/search/QuerySegments';
 
 function row(keyword: string): QuickSearch {
   return {
-    id: 1, name: keyword, mode: 0, category: 0, keyword: keyword, language: '',
-    advanceSearch: 0, minRating: -1, pageFrom: -1, pageTo: -1, time: 0
+    id: 1, category: 0, keyword: keyword, language: '',
+    advanceSearch: 0, minRating: -1, time: 0
   };
 }
 
@@ -20,8 +21,8 @@ export default function quickSearchTest() {
 
     it('quickSearchToParam_restores_conditions', 0, () => {
       const rec: QuickSearch = {
-        id: 1, name: 'nico', mode: 0, category: 0x2, keyword: 'nico', language: '',
-        advanceSearch: 3, minRating: 4, pageFrom: -1, pageTo: -1, time: 0
+        id: 1, category: 0x2, keyword: 'nico', language: '',
+        advanceSearch: 3, minRating: 4, time: 0
       };
       const param = quickSearchToParam(rec);
       expect(param.query).assertEqual('nico');
@@ -34,8 +35,8 @@ export default function quickSearchTest() {
 
     it('quickSearchSummary_describes_conditions', 0, () => {
       const rec: QuickSearch = {
-        id: 1, name: 'nico', mode: 0, category: 0x2, keyword: 'nico', language: '',
-        advanceSearch: 3, minRating: 4, pageFrom: -1, pageTo: -1, time: 0
+        id: 1, category: 0x2, keyword: 'nico', language: '',
+        advanceSearch: 3, minRating: 4, time: 0
       };
       expect(quickSearchSummary(rec)).assertEqual('排除 DOUJINSHI · title/tags · ★4+');
     });
@@ -46,8 +47,8 @@ export default function quickSearchTest() {
 
     it('quickSearch_round_trips_language', 0, () => {
       const rec: QuickSearch = {
-        id: 1, name: 'lang', mode: 0, category: 0, keyword: 'lang', language: 'chinese',
-        advanceSearch: 0, minRating: -1, pageFrom: -1, pageTo: -1, time: 0
+        id: 1, category: 0, keyword: 'lang', language: 'chinese',
+        advanceSearch: 0, minRating: -1, time: 0
       };
       expect(quickSearchToParam(rec).language).assertEqual('chinese');
       expect(quickSearchSummary(rec)).assertEqual('chinese');
@@ -63,33 +64,33 @@ export default function quickSearchTest() {
       expect(param.minRating).assertEqual(-1);
     });
 
-    it('quickSearchToParam_uploader_mode_adds_qualifier', 0, () => {
-      // 上传者入口已折叠成普通关键词：老记录（mode=1）恢复时补 `uploader:"…"`，
-      // 裸名字会被当普通关键词，搜出一堆无关画廊。
-      const legacy: QuickSearch = {
-        id: 1, name: '上传者 some one', mode: 1, category: 0, keyword: 'some one', language: '',
-        advanceSearch: 0, minRating: -1, pageFrom: -1, pageTo: -1, time: 0
+    it('quickSearch_round_trips_multi_condition_verbatim', 0, () => {
+      // 保存的是 chips 拼出的**完整**串，恢复时原样发出：任何「按入口模式改写语法」的处理都会
+      // 把第二个条件吞进第一个标签的值里（`char:"a$" big breasts` → `char:"a$" big breasts$"`）。
+      const keyword: string = joinQueryText(['character:"sparkle$"', '-female:"big breasts$"'], '');
+      expect(keyword).assertEqual('character:"sparkle$" -female:"big breasts$"');
+      const rec: QuickSearch = {
+        id: 1, category: 0, keyword: keyword, language: 'chinese',
+        advanceSearch: 0, minRating: -1, time: 0
       };
-      expect(quickSearchToParam(legacy).query).assertEqual('uploader:"some one"');
-      expect(quickSearchToParam(legacy).kind).assertEqual('uploader');
+      const param = quickSearchToParam(rec);
+      expect(param.query).assertEqual(keyword);
+      expect(splitQueryTokens(param.query).length).assertEqual(2);
+      expect(param.language).assertEqual('chinese');
+      // 手写的 qualifier（上传者 / 裸关键词）也不改写。
+      expect(quickSearchToParam(row('uploader:"some one"')).query).assertEqual('uploader:"some one"');
+      expect(quickSearchToParam(row('blue archive')).query).assertEqual('blue archive');
     });
 
-    it('quickSearchToParam_tag_mode_writes_exact_syntax', 0, () => {
-      // 修复前存的裸串（mode=2）再运行必须是 `namespace:"tag$"`：裸串会被搜索框拆成两个词。
-      const legacy: QuickSearch = {
-        id: 1, name: '标签', mode: 2, category: 0, keyword: 'parody:blue archive', language: '',
-        advanceSearch: 0, minRating: -1, pageFrom: -1, pageTo: -1, time: 0
+    it('quickSearch_round_trips_language_and_rating', 0, () => {
+      const rec: QuickSearch = {
+        id: 1, category: 0, keyword: 'character:"sparkle$"', language: 'chinese',
+        advanceSearch: 0, minRating: 4, time: 0
       };
-      expect(quickSearchToParam(legacy).kind).assertEqual('tag');
-      expect(quickSearchToParam(legacy).query).assertEqual('parody:"blue archive$"');
-      // 已正规化的记录幂等。
-      const modern: QuickSearch = {
-        id: 2, name: '标签', mode: 2, category: 0, keyword: 'parody:"blue archive$"', language: '',
-        advanceSearch: 0, minRating: -1, pageFrom: -1, pageTo: -1, time: 0
-      };
-      expect(quickSearchToParam(modern).query).assertEqual('parody:"blue archive$"');
-      // keyword 态是用户自由表达式，不改写。
-      expect(quickSearchToParam(row('blue archive')).query).assertEqual('blue archive');
+      const param = quickSearchToParam(rec);
+      expect(param.query).assertEqual('character:"sparkle$"');
+      expect(param.language).assertEqual('chinese');
+      expect(param.minRating).assertEqual(4);
     });
   });
 }

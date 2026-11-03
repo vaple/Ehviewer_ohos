@@ -5,7 +5,7 @@ import { GalleryDetail } from '../../main/ets/model/GalleryDetail';
 
 function detailOf(gid: number): GalleryDetail {
   return {
-    gid, token: 't', title: 'x', titleJpn: '', category: 0, uploader: '', posted: '',
+    gid, token: 't', title: 'x', category: 0, uploader: '', posted: '',
     rating: 0, ratingCount: 0, pages: 1, thumb: '', tagGroups: [], previewTokens: [],
     previews: [], apiUid: -1, apiKey: '', comments: [], isFavorited: false, favoriteName: ''
   };
