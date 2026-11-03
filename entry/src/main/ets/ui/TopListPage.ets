@@ -4,13 +4,14 @@ import { EhSite, EhUrl } from '../network/EhUrl';
 import { CookieStore } from '../network/CookieStore';
 import { RcpHttpClient } from '../network/RcpHttpClient';
 import { EhClient } from '../network/EhClient';
-import { GalleryInfo } from '../model/GalleryInfo';
 import { Logger } from '../common/Logger';
 import { errorText } from '../common/ErrorText';
 import { GalleryRow, GalleryRowItem, loadMissingThumbs, pushGalleryDetail } from './GalleryRow';
 import { AppSettings } from '../state/AppSettings';
 import { WindowState } from '../state/WindowState';
-import { PagedDataSource } from '../common/PagedList';
+import { PagedDataSource, PREFETCH_TAIL, shouldFetchMore } from '../common/PagedList';
+import { GalleryListFeed } from './GalleryListFeed';
+import { GalleryListPage } from '../parser/GalleryListParser';
 import { PAGE_PADDING, CARD_GAP, TAB_BAR_CLEARANCE } from './Materials';
 import { RankState } from '../state/RankState';
 import { TITLE_BAR_H, RANK_CHIPS_H } from './NavStyle';
@@ -38,18 +39,26 @@ export struct TopListPage {
   /** 当前下拉距离（vp，来自 `Refresh.onOffsetChange`），只用于刷新圈的淡入。 */
   @Local pullOffset: number = 0;
   @Local message: string = '加载中…';
-  private page: number = 0;
   private isLoading: boolean = false;
-  /** 懒加载数据源（`LazyForEach` 官方范式；`getData` 进入尾部窗口即预取下一页）。 */
+  /** 分页状态唯一持有者（items / 下一页游标 / 已访问 URL）。 */
+  private feed: GalleryListFeed = new GalleryListFeed(async (url: string): Promise<GalleryListPage> => {
+    return this.fetchPage(url);
+  });
+  /** 懒加载数据源（只负责 items + hasMore；预取由页面在滚动到底时显式触发）。 */
   private dataSource: PagedDataSource<GalleryRowItem> =
     new PagedDataSource<GalleryRowItem>(() => {
-      this.load(false);
-    }, () => {
       return this.isLoading;
     });
 
   private context(): common.Context {
     return this.getUIContext().getHostContext() as common.Context;
+  }
+
+  private async fetchPage(url: string): Promise<GalleryListPage> {
+    const cookies: CookieStore = new CookieStore();
+    await cookies.init(this.context());
+    const client: EhClient = new EhClient(new RcpHttpClient(), cookies);
+    return client.getGalleryList(this.settings.site, url, this.settings.thumbSize);
   }
 
   /** 标题栏胶囊换档 → 重取（`version` 每次真正换档 +1；同档点击不触发）。 */
@@ -58,62 +67,22 @@ export struct TopListPage {
     this.load(true);
   }
 
-  private toRowItems(list: GalleryInfo[]): GalleryRowItem[] {
-    const mapped: GalleryRowItem[] = [];
-    for (let i = 0; i < list.length; i++) {
-      const item: GalleryRowItem = new GalleryRowItem();
-      item.gid = list[i].gid;
-      item.token = list[i].token;
-      item.title = list[i].title;
-      item.uploader = list[i].uploader;
-      item.thumbUrl = list[i].thumb;
-      item.category = list[i].category;
-      item.rating = list[i].rating;
-      item.posted = list[i].posted;
-      item.simpleLanguage = list[i].simpleLanguage;
-      item.pages = list[i].pages;
-      mapped.push(item);
-    }
-    return mapped;
-  }
-
   private async load(refresh: boolean): Promise<void> {
     if (this.isLoading) {
       return;
     }
     this.isLoading = true;
-    if (refresh) {
-      this.page = 0;
-    }
     try {
       const site: EhSite = this.settings.site;
       const cookies: CookieStore = new CookieStore();
       await cookies.init(this.context());
-      const client: EhClient = new EhClient(new RcpHttpClient(), cookies);
       this.message = '加载中…';
-      const list: GalleryInfo[] = await client.getGalleryList(site, EhUrl.toplist(this.rankState.range, this.page), this.settings.thumbSize);
-      const mapped: GalleryRowItem[] = this.toRowItems(list);
-      if (refresh) {
-        this.items = mapped;
-      } else {
-        const appended: GalleryRowItem[] = [];
-        for (let i = 0; i < mapped.length; i++) {
-          let exists: boolean = false;
-          for (let j = 0; j < this.items.length; j++) {
-            if (this.items[j].gid === mapped[i].gid) {
-              exists = true;
-              break;
-            }
-          }
-          if (!exists) {
-            appended.push(mapped[i]);
-          }
-        }
-        this.items = this.items.concat(appended);
-      }
+      // 后续页面一律用站点给的 next；这里只构造第一页 URL（`p=0`）。
+      await this.feed.load(EhUrl.toplist(this.rankState.range, 0), refresh);
+      this.items = this.feed.items;
       this.message = this.items.length === 0 ? '该榜单暂无内容' : '';
-      this.dataSource.setItems(this.items, mapped.length > 0);
-      this.page += 1;
+      this.dataSource.setItems(this.items, this.feed.hasMore);
+      const client: EhClient = new EhClient(new RcpHttpClient(), cookies);
       loadMissingThumbs(this.context(), client, site, this.items).catch((_e: object) => {
         // 缩略图补齐失败不影响列表
       });
@@ -173,6 +142,12 @@ export struct TopListPage {
           .width('100%')
           .height('100%')
           .cachedCount(4)
+          // 预取：滚到尾部窗口就问一次（`getData` 不再有副作用）。
+          .onScrollIndex((_start: number, end: number) => {
+            if (shouldFetchMore(this.items.length, end + PREFETCH_TAIL, this.feed.hasMore, this.isLoading)) {
+              this.load(false);
+            }
+          })
           .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
         }
         .onRefreshing(() => { this.load(true); })

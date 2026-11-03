@@ -17,16 +17,19 @@ export function shouldFetchMore(loaded: number, requestedEnd: number,
   return requestedEnd >= loaded - PREFETCH_TAIL;
 }
 
-/** 分页数据源：`setItems` 整体替换并通知；`hasMore` 由调用方按"末批是否满页"维护。 */
+/**
+ * 分页数据源：`setItems` 整体替换并通知；`hasMore` 由 `GalleryListFeed` 的出参决定。
+ *
+ * **`getData` 不触发加载**：它是读操作，副作用会让"渲染"变成"发请求"，历史上就是这样自激成无限翻页的
+ * （`ui/AGENTS.md` #66）。预取由页面在滚动到尾部时显式调用（复用 `shouldFetchMore`）。
+ */
 export class PagedDataSource<T> implements IDataSource {
   private items: T[] = [];
   private listeners: DataChangeListener[] = [];
   private hasMore: boolean = true;
   private loading: () => boolean;
-  private onNeedMore: () => void;
 
-  constructor(onNeedMore: () => void, loading: () => boolean) {
-    this.onNeedMore = onNeedMore;
+  constructor(loading: () => boolean) {
     this.loading = loading;
   }
 
@@ -38,14 +41,16 @@ export class PagedDataSource<T> implements IDataSource {
     }
   }
 
+  /** 页面在滚动到底部时问一次：现在该不该再取一页。 */
+  wantsMore(requestedEnd: number): boolean {
+    return shouldFetchMore(this.items.length, requestedEnd, this.hasMore, this.loading());
+  }
+
   totalCount(): number {
     return this.items.length;
   }
 
   getData(index: number): T {
-    if (shouldFetchMore(this.items.length, index, this.hasMore, this.loading())) {
-      this.onNeedMore();
-    }
     return this.items[index];
   }
 

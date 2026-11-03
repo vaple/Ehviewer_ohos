@@ -4,19 +4,83 @@ import { GalleryDetailUrlParser, DetailUrlResult } from './GalleryDetailUrlParse
 import { categoryOf, languageOf, ratingFromStyle } from './ParserUtils';
 import { EhUrl } from '../network/EhUrl';
 
-const NEXT_PAGE: RegExp = new RegExp('[?&]page=(\\d+)');
 const ITG_CLASS: string = '.itg';
 const PAGES_TEXT: RegExp = new RegExp('^(\\d+)\\s+pages$');
+const SITE_BASE: string = 'https://e-hentai.org';
+
+/** 一页列表的解析结果：条目 + 站点自己给的下一页 URL（没有就是到底）。 */
+export interface GalleryListPage {
+  items: GalleryInfo[];
+  next: string | null;
+}
+
+/**
+ * 从分页控件里取"下一页"链接。
+ *
+ * 站点有两套分页控件，**必须都认**（真机抓包实证）：
+ * - `table.ptt`（排行榜）：最后一格是 `>` 箭头，末页时它退化成纯文本、没有 `<a>`；
+ * - `div.searchnav` 的 `a#dnext`（搜索 / 收藏 / 订阅）：单页时它是 `<span id="dnext">`，
+ *   有下一页时才是 `<a id="dnext" href="…?next=<gid>">`。
+ *
+ * 认不出结构时返回 `null`（fail-closed：宁可少翻一页，也不能靠猜页码无限翻）。
+ */
+function nextUrlOf(root: HtmlNode): string | null {
+  const ptt: HtmlNode[] = Html.select(root, '.ptt');
+  if (ptt.length > 0) {
+    const cells: HtmlNode[] = Html.select(ptt[0], 'td');
+    if (cells.length === 0) {
+      return null;
+    }
+    const anchors: HtmlNode[] = Html.select(cells[cells.length - 1], 'a');
+    return anchors.length > 0 ? absoluteUrl(Html.attr(anchors[0], 'href')) : null;
+  }
+  const dnext: HtmlNode[] = Html.select(root, '#dnext');
+  if (dnext.length > 0) {
+    // 单页时这里是 `<span>`，没有 `href` → `null`，正好表示"没有下一页"。
+    return absoluteUrl(Html.attr(dnext[0], 'href'));
+  }
+  return null;
+}
+
+/** 属性里的 `&amp;` 不一定被解码，统一补齐；相对路径按站点域名补全。 */
+function absoluteUrl(href: string | null): string | null {
+  if (href === null || href.length === 0) {
+    return null;
+  }
+  const url: string = href.replace(new RegExp('&amp;', 'g'), '&');
+  if (url.startsWith('http://') || url.startsWith('https://')) {
+    return url;
+  }
+  if (url.startsWith('/')) {
+    return `${SITE_BASE}${url}`;
+  }
+  return null;
+}
 
 /** 解析画廊列表 HTML → `GalleryInfo[]`（仅取 `.itg` 容器内的行，与上游 Android 版 EhViewer 一致）。
  * `thumbSize` 透传设置（0 原图 / 1 `_250` / 2 `_300`，默 0 不改现有调用）。 */
 export class GalleryListParser {
+  /** 兼容旧调用：只要条目。新代码请用 `parsePage`（它同时给下一页 URL）。 */
   static parse(html: string, thumbSize: number = 0): GalleryInfo[] {
+    return GalleryListParser.parsePage(html, thumbSize).items;
+  }
+
+  /**
+   * 解析一页列表：条目 + 站点自己给的下一页 URL。
+   * `next === null` 就等于"到底了"——不再靠"本页有没有新增条目"猜（见 `ui/AGENTS.md` #66）。
+   */
+  static parsePage(html: string, thumbSize: number = 0): GalleryListPage {
     const root: HtmlNode = Html.parse(html);
+    // 先取下一页：即使这一页没有任何条目（No hits），分页控件也可能存在。
+    const next: string | null = nextUrlOf(root);
     const containers: HtmlNode[] = Html.select(root, ITG_CLASS);
     if (containers.length === 0) {
-      return [];
+      return { items: [], next: next };
     }
+    return { items: GalleryListParser.parseItems(containers, thumbSize), next: next };
+  }
+
+  private static parseItems(containers: HtmlNode[], thumbSize: number): GalleryInfo[] {
     // 表格模式（Compact/Extended：`table.itg`）行是 `tr`；
     // 缩略图模式（Thumbnail：`div.itg.gld`）项是 `div.gl1t`（源 `GalleryListParser` 同形分支）。
     const rows: HtmlNode[] = Html.tagName(containers[0]) === 'table'
@@ -141,15 +205,5 @@ export class GalleryListParser {
       list.push(info);
     }
     return list;
-  }
-
-  /** 下一页页码（`page=` 参数）；无则 -1。 */
-  static parseNextPage(html: string): number {
-    const m: RegExpMatchArray | null = html.match(NEXT_PAGE);
-    if (m === null) {
-      return -1;
-    }
-    const page: number = Number.parseInt(m[1], 10);
-    return isNaN(page) ? -1 : page;
   }
 }

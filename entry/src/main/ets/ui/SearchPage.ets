@@ -5,6 +5,8 @@ import { CookieStore } from '../network/CookieStore';
 import { RcpHttpClient } from '../network/RcpHttpClient';
 import { EhClient } from '../network/EhClient';
 import { GalleryInfo } from '../model/GalleryInfo';
+import { GalleryListFeed } from './GalleryListFeed';
+import { GalleryListPage } from '../parser/GalleryListParser';
 import { SearchKind, SearchParam } from '../model/SearchParam';
 import { Logger } from '../common/Logger';
 import { errorText } from '../common/ErrorText';
@@ -20,7 +22,7 @@ import { TagSuggestionPanel } from './TagSuggestionPanel';
 import { FilterDao } from '../db/dao/FilterDao';
 import { DbHelper } from '../db/DbHelper';
 import { Filter } from '../model/Filter';
-import { PagedDataSource } from '../common/PagedList';
+import { PagedDataSource, PREFETCH_TAIL, shouldFetchMore } from '../common/PagedList';
 import { QuickSearchDao } from '../db/dao/QuickSearchDao';
 import { QuickSearch } from '../model/QuickSearch';
 import { hasSavedKeyword } from '../search/QuickSearchQuery';
@@ -148,17 +150,25 @@ export struct SearchPage {
   @Local advancedExpanded: boolean = false;
   /** 高级筛选展开态：首进展开，提交搜索后自动收起（摘要行留在标题栏，点之再展开）。 */
   @Local filtersExpanded: boolean = true;
-  private page: number = 0;
   private isLoading: boolean = false;
   /** 结果列表滚动器（折叠/展开筛选时回顶用；不再有吸顶 header）。 */
   private listScroller: Scroller = new Scroller();
-  /** 懒加载数据源（`LazyForEach` 官方范式；`getData` 进入尾部窗口即预取下一页）。 */
+  /** 分页状态唯一持有者（items / 下一页游标 / 已访问 URL）。 */
+  private feed: GalleryListFeed = new GalleryListFeed(async (url: string): Promise<GalleryListPage> => {
+    return this.fetchPage(url);
+  });
+  /** 懒加载数据源（只负责 items + hasMore；预取由页面在滚动到底时显式触发）。 */
   private dataSource: PagedDataSource<GalleryRowItem> =
     new PagedDataSource<GalleryRowItem>(() => {
-      this.load(false);
-    }, () => {
       return this.isLoading;
     });
+
+  private async fetchPage(url: string): Promise<GalleryListPage> {
+    const cookies: CookieStore = new CookieStore();
+    await cookies.init(this.context());
+    const client: EhClient = new EhClient(new RcpHttpClient(), cookies);
+    return client.getGalleryList(this.settings.site, url, this.settings.thumbSize);
+  }
   private pageStack: NavPathStack | undefined = undefined;
   /** 搜索框控制器（官方收键盘手段：`SearchController.stopEditing()`；见 `search.d.ts:74`）。 */
   private searchController: SearchController = new SearchController();
@@ -505,26 +515,7 @@ export struct SearchPage {
       pageFrom: SearchPage.parsePage(this.pageFromText),
       pageTo: SearchPage.parsePage(this.pageToText)
     };
-    return EhUrl.search(site, keyword, this.page, fCatsMask(bits), filters);
-  }
-
-  private toRowItems(list: GalleryInfo[]): GalleryRowItem[] {
-    const mapped: GalleryRowItem[] = [];
-    for (let i = 0; i < list.length; i++) {
-      const item: GalleryRowItem = new GalleryRowItem();
-      item.gid = list[i].gid;
-      item.token = list[i].token;
-      item.title = list[i].title;
-      item.uploader = list[i].uploader;
-      item.thumbUrl = list[i].thumb;
-      item.category = list[i].category;
-      item.rating = list[i].rating;
-      item.posted = list[i].posted;
-      item.simpleLanguage = list[i].simpleLanguage;
-      item.pages = list[i].pages;
-      mapped.push(item);
-    }
-    return mapped;
+    return EhUrl.search(site, keyword, 0, fCatsMask(bits), filters);
   }
 
   /** 排除规则重读（每次搜索自动拼 `-…` 查询条件；不再本地过滤列表）。 */
@@ -558,39 +549,17 @@ export struct SearchPage {
       return;
     }
     this.isLoading = true;
-    if (refresh) {
-      this.page = 0;
-    }
     try {
       const site: EhSite = this.settings.site;
       const cookies: CookieStore = new CookieStore();
       await cookies.init(this.context());
       const client: EhClient = new EhClient(new RcpHttpClient(), cookies);
       this.message = '搜索中…';
-      const url: string = this.buildUrl(site);
-      const list: GalleryInfo[] = await client.getGalleryList(site, url, this.settings.thumbSize);
-      const mapped: GalleryRowItem[] = this.toRowItems(list);
-      if (refresh) {
-        this.items = mapped;
-      } else {
-        const appended: GalleryRowItem[] = [];
-        for (let i = 0; i < mapped.length; i++) {
-          let exists: boolean = false;
-          for (let j = 0; j < this.items.length; j++) {
-            if (this.items[j].gid === mapped[i].gid) {
-              exists = true;
-              break;
-            }
-          }
-          if (!exists) {
-            appended.push(mapped[i]);
-          }
-        }
-        this.items = this.items.concat(appended);
-      }
+      // 后续页面一律用站点给的 next（搜索是 `?next=<gid>` 游标）；这里只构造第一页。
+      await this.feed.load(this.buildUrl(site), refresh);
+      this.items = this.feed.items;
       this.message = this.items.length === 0 ? '没有找到相关画廊' : '';
-      this.dataSource.setItems(this.items, mapped.length > 0);
-      this.page += 1;
+      this.dataSource.setItems(this.items, this.feed.hasMore);
       loadMissingThumbs(this.context(), client, site, this.items).catch((_e: object) => {
         // 缩略图补齐失败不影响列表
       });
@@ -1090,6 +1059,12 @@ export struct SearchPage {
           .width('100%')
           .height('100%')
           .cachedCount(4)
+          // 预取：滚到尾部窗口就问一次（`getData` 不再有副作用）。
+          .onScrollIndex((_start: number, end: number) => {
+            if (shouldFetchMore(this.items.length, end + PREFETCH_TAIL, this.feed.hasMore, this.isLoading)) {
+              this.load(false);
+            }
+          })
           .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
           // 上滑即收起联想：整块搜索区（含输入框）会随标题栏一起隐藏，面板留着就成了无主浮层。
           .onScrollStart(() => {

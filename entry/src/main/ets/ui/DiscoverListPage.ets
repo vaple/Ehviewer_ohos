@@ -4,7 +4,6 @@ import { EhSite, EhUrl } from '../network/EhUrl';
 import { CookieStore } from '../network/CookieStore';
 import { RcpHttpClient } from '../network/RcpHttpClient';
 import { EhClient } from '../network/EhClient';
-import { GalleryInfo } from '../model/GalleryInfo';
 import { Logger } from '../common/Logger';
 import { GalleryRow, GalleryRowItem, loadMissingThumbs, pushGalleryDetail } from './GalleryRow';
 import { AppSettings } from '../state/AppSettings';
@@ -13,7 +12,9 @@ import { FilterDao } from '../db/dao/FilterDao';
 import { DbHelper } from '../db/DbHelper';
 import { Filter } from '../model/Filter';
 import { exclusionQueryOf } from '../search/SearchQuery';
-import { PagedDataSource } from '../common/PagedList';
+import { GalleryListFeed } from './GalleryListFeed';
+import { GalleryListPage } from '../parser/GalleryListParser';
+import { PagedDataSource, PREFETCH_TAIL, shouldFetchMore } from '../common/PagedList';
 import { CARD_GAP, PAGE_PADDING, TAB_BAR_CLEARANCE } from './Materials';
 import { TITLE_BAR_H } from './NavStyle';
 import { RefreshSpinner } from './RefreshSpinner';
@@ -44,13 +45,14 @@ export struct DiscoverListPage {
   /** 当前下拉距离（vp，来自 `Refresh.onOffsetChange`），只用于刷新圈的淡入。 */
   @Local pullOffset: number = 0;
   @Local message: string = '加载中…';
-  private page: number = 0;
   private isLoading: boolean = false;
-  /** 懒加载数据源（`LazyForEach` 官方范式；`getData` 进入尾部窗口即预取下一页）。 */
+  /** 分页状态唯一持有者（items / 下一页游标 / 已访问 URL）。 */
+  private feed: GalleryListFeed = new GalleryListFeed(async (url: string): Promise<GalleryListPage> => {
+    return this.fetchPage(url);
+  });
+  /** 懒加载数据源（只负责 items + hasMore；预取由页面在滚动到底时显式触发）。 */
   private dataSource: PagedDataSource<GalleryRowItem> =
     new PagedDataSource<GalleryRowItem>(() => {
-      this.load(false);
-    }, () => {
       return this.isLoading;
     });
 
@@ -58,23 +60,12 @@ export struct DiscoverListPage {
     return this.getUIContext().getHostContext() as common.Context;
   }
 
-  private toRowItems(list: GalleryInfo[]): GalleryRowItem[] {
-    const mapped: GalleryRowItem[] = [];
-    for (let i = 0; i < list.length; i++) {
-      const item: GalleryRowItem = new GalleryRowItem();
-      item.gid = list[i].gid;
-      item.token = list[i].token;
-      item.title = list[i].title;
-      item.uploader = list[i].uploader;
-      item.thumbUrl = list[i].thumb;
-      item.category = list[i].category;
-      item.rating = list[i].rating;
-      item.posted = list[i].posted;
-      item.simpleLanguage = list[i].simpleLanguage;
-      item.pages = list[i].pages;
-      mapped.push(item);
-    }
-    return mapped;
+  /** 取一页（供 feed 回调；每次新建 client 与旧实现一致，避免跨页持有 Cookie 快照）。 */
+  private async fetchPage(url: string): Promise<GalleryListPage> {
+    const cookies: CookieStore = new CookieStore();
+    await cookies.init(this.context());
+    const client: EhClient = new EhClient(new RcpHttpClient(), cookies);
+    return client.getGalleryList(this.settings.site, url, this.settings.thumbSize);
   }
 
   private async load(refresh: boolean): Promise<void> {
@@ -82,9 +73,6 @@ export struct DiscoverListPage {
       return;
     }
     this.isLoading = true;
-    if (refresh) {
-      this.page = 0;
-    }
     try {
       const site: EhSite = this.settings.site;
       const cookies: CookieStore = new CookieStore();
@@ -95,7 +83,6 @@ export struct DiscoverListPage {
         this.isLoading = false;
         return;
       }
-      const client: EhClient = new EhClient(new RcpHttpClient(), cookies);
       let url: string;
       if (this.mode === 'watched') {
         // `/watched` 支持完整搜索参数：把「搜索排除」拼成 f_search（与关键词搜索同一套规则）。
@@ -107,39 +94,21 @@ export struct DiscoverListPage {
         } catch (e) {
           Logger.error('Block', `exclusions load failed: ${e}`);
         }
-        url = EhUrl.watched(site, this.page, excl);
+        url = EhUrl.watched(site, 0, excl);
       } else {
         url = EhUrl.popular(site);
       }
       this.message = '加载中…';
-      const list: GalleryInfo[] = await client.getGalleryList(site, url, this.settings.thumbSize);
-      const mapped: GalleryRowItem[] = this.toRowItems(list);
-      if (refresh) {
-        this.items = mapped;
-      } else {
-        const appended: GalleryRowItem[] = [];
-        for (let i = 0; i < mapped.length; i++) {
-          let exists: boolean = false;
-          for (let j = 0; j < this.items.length; j++) {
-            if (this.items[j].gid === mapped[i].gid) {
-              exists = true;
-              break;
-            }
-          }
-          if (!exists) {
-            appended.push(mapped[i]);
-          }
-        }
-        this.items = this.items.concat(appended);
-      }
+      // refresh 时 feed 从 url 重新开始；否则顺着上一页给的 next 走（next 为 null 即到底）。
+      await this.feed.load(url, refresh);
+      this.items = this.feed.items;
       if (this.items.length === 0) {
         this.message = this.mode === 'watched' ? '暂无订阅' : '暂无热门';
       } else {
         this.message = '';
       }
-      this.dataSource.setItems(this.items,
-        this.mode === 'watched' && mapped.length > 0);
-      this.page += 1;
+      this.dataSource.setItems(this.items, this.feed.hasMore);
+      const client: EhClient = new EhClient(new RcpHttpClient(), cookies);
       loadMissingThumbs(this.context(), client, site, this.items).catch((_e: object) => {
         // 缩略图补齐失败不影响列表
       });
@@ -225,6 +194,12 @@ export struct DiscoverListPage {
           .width('100%')
           .height('100%')
           .cachedCount(4)
+          // 预取：滚到尾部窗口就问一次（`getData` 不再有副作用，见 `ui/AGENTS.md` #66）。
+          .onScrollIndex((_start: number, end: number) => {
+            if (shouldFetchMore(this.items.length, end + PREFETCH_TAIL, this.feed.hasMore, this.isLoading)) {
+              this.load(false);
+            }
+          })
           .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
         }
         .onRefreshing(() => { this.load(true); })

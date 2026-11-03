@@ -1,17 +1,18 @@
 import { common } from '@kit.AbilityKit';
 import { AppStorageV2, PersistenceV2, SymbolGlyphModifier, promptAction } from '@kit.ArkUI';
-import { EhSite } from '../network/EhUrl';
+import { EhSite, EhUrl } from '../network/EhUrl';
 import { CookieStore } from '../network/CookieStore';
 import { RcpHttpClient } from '../network/RcpHttpClient';
 import { EhClient, FavPage } from '../network/EhClient';
-import { GalleryInfo } from '../model/GalleryInfo';
 import { DetailParam } from '../model/DetailParam';
 import { Logger } from '../common/Logger';
 import { errorText } from '../common/ErrorText';
 import { AppSettings } from '../state/AppSettings';
 import { WindowState } from '../state/WindowState';
 import { HdsListItem, HdsNavDestination, PrefixImage } from '@kit.UIDesignKit';
-import { PagedDataSource } from '../common/PagedList';
+import { PagedDataSource, PREFETCH_TAIL, shouldFetchMore } from '../common/PagedList';
+import { GalleryListFeed } from './GalleryListFeed';
+import { GalleryListPage } from '../parser/GalleryListParser';
 import { GalleryRowItem, loadMissingThumbs, rowLine1, rowLine2, toDetailPreview } from './GalleryRow';
 import { catLabel } from './CategoryStyle';
 import { FavCatSheet, FavCatOption } from './FavCatSheet';
@@ -63,11 +64,22 @@ export struct FavoritesPage {
   /** 收藏列表滚动器（标题栏渐变模糊用）。 */
   private scroller: Scroller = new Scroller();
   private isLoading: boolean = false;
-  /** 懒加载数据源（`LazyForEach` 官方范式；`getData` 进入尾部窗口即预取下一页）。 */
+  /** 分页状态唯一持有者；每取一页顺手刷新收藏分类/计数/排序元信息。 */
+  private feed: GalleryListFeed = new GalleryListFeed(async (url: string): Promise<GalleryListPage> => {
+    const cookies: CookieStore = new CookieStore();
+    await cookies.init(this.context());
+    const client: EhClient = this.clientOf(cookies);
+    const fav: FavPage = await client.getFavoritesPage(url, this.settings.site, this.settings.thumbSize);
+    this.cats = fav.cats;
+    this.counts = fav.counts;
+    if (fav.order.length > 0) {
+      this.order = fav.order;
+    }
+    return { items: fav.items, next: fav.next };
+  });
+  /** 懒加载数据源（只负责 items + hasMore；预取由页面在滚动到底时显式触发）。 */
   private dataSource: PagedDataSource<GalleryRowItem> =
     new PagedDataSource<GalleryRowItem>(() => {
-      this.load(false);
-    }, () => {
       return this.isLoading;
     });
   private pageStack: NavPathStack | undefined = undefined;
@@ -78,25 +90,6 @@ export struct FavoritesPage {
 
   private clientOf(cookies: CookieStore): EhClient {
     return new EhClient(new RcpHttpClient(), cookies);
-  }
-
-  private toRowItems(list: GalleryInfo[]): GalleryRowItem[] {
-    const mapped: GalleryRowItem[] = [];
-    for (let i = 0; i < list.length; i++) {
-      const item: GalleryRowItem = new GalleryRowItem();
-      item.gid = list[i].gid;
-      item.token = list[i].token;
-      item.title = list[i].title;
-      item.uploader = list[i].uploader;
-      item.thumbUrl = list[i].thumb;
-      item.category = list[i].category;
-      item.rating = list[i].rating;
-      item.posted = list[i].posted;
-      item.simpleLanguage = list[i].simpleLanguage;
-      item.pages = list[i].pages;
-      mapped.push(item);
-    }
-    return mapped;
   }
 
   /** 移动收藏夹半模态内容（官方 `bindSheet` 承载）。 */
@@ -180,9 +173,6 @@ export struct FavoritesPage {
       return;
     }
     this.isLoading = true;
-    if (refresh) {
-      this.page = 0;
-    }
     try {
       const site: EhSite = this.settings.site;
       const cookies: CookieStore = new CookieStore();
@@ -197,35 +187,13 @@ export struct FavoritesPage {
       }
       const client: EhClient = this.clientOf(cookies);
       this.message = '加载中…';
-      const fav: FavPage =
-        await client.getCloudFavorites(site, this.favCat, this.keyword, this.page, this.settings.thumbSize);
-      const mapped: GalleryRowItem[] = this.toRowItems(fav.items);
-      if (refresh) {
-        this.items = mapped;
-      } else {
-        const appended: GalleryRowItem[] = [];
-        for (let i = 0; i < mapped.length; i++) {
-          let exists: boolean = false;
-          for (let j = 0; j < this.items.length; j++) {
-            if (this.items[j].gid === mapped[i].gid) {
-              exists = true;
-              break;
-            }
-          }
-          if (!exists) {
-            appended.push(mapped[i]);
-          }
-        }
-        this.items = this.items.concat(appended);
-      }
-      this.cats = fav.cats;
-      this.counts = fav.counts;
-      if (fav.order.length > 0) {
-        this.order = fav.order;
-      }
+      // 后续页面用站点给的 next（`favorites.php?next=…`）；这里只构造第一页。
+      const firstUrl: string =
+        EhUrl.favorites(site, this.favCat, this.keyword, 0);
+      await this.feed.load(firstUrl, refresh);
+      this.items = this.feed.items;
       this.message = this.items.length === 0 ? '还没有云收藏' : '';
-      this.dataSource.setItems(this.items, mapped.length > 0);
-      this.page += 1;
+      this.dataSource.setItems(this.items, this.feed.hasMore);
       loadMissingThumbs(this.context(), client, site, this.items).catch((_e: object) => {
         // 缩略图补齐失败不影响列表
       });
@@ -540,6 +508,12 @@ export struct FavoritesPage {
           .width('100%')
           .layoutWeight(1)
           .cachedCount(4)
+          // 预取：滚到尾部窗口就问一次（`getData` 不再有副作用）。
+          .onScrollIndex((_start: number, end: number) => {
+            if (shouldFetchMore(this.items.length, end + PREFETCH_TAIL, this.feed.hasMore, this.isLoading)) {
+              this.load(false);
+            }
+          })
           .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
           if (this.selectMode) {
             Row({ space: 16 }) {

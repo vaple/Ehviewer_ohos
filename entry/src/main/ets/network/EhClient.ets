@@ -2,7 +2,7 @@ import { AppError } from '../common/AppError';
 import { Logger } from '../common/Logger';
 import { GalleryInfo } from '../model/GalleryInfo';
 import { GalleryDetail } from '../model/GalleryDetail';
-import { GalleryListParser } from '../parser/GalleryListParser';
+import { GalleryListParser, GalleryListPage } from '../parser/GalleryListParser';
 import { GalleryDetailParser } from '../parser/GalleryDetailParser';
 import { PreviewItem } from '../model/PreviewItem';
 import { GalleryPageParser, GalleryPageResult } from '../parser/GalleryPageParser';
@@ -17,12 +17,13 @@ import { DetailCache, sharedDetailCache } from './DetailCache';
 import { EhSite, EhUrl } from './EhUrl';
 import { HttpClient, HttpRequestOptions, HttpResponse } from './HttpClient';
 
-/** 云收藏页（一行画廊 + 类/计数/排序元信息）。 */
+/** 云收藏页（一行画廊 + 类/计数/排序元信息 + 站点给的下一页 URL）。 */
 export interface FavPage {
   items: GalleryInfo[];
   cats: string[];
   counts: number[];
   order: string;
+  next: string | null;
 }
 
 /** 从 HTML 里取 `<title>`（只用于诊断日志：判断站点回的是列表页、登录页还是警告页）。 */
@@ -70,8 +71,8 @@ export class EhClient {
     return opt;
   }
 
-  /** 拉取并解析画廊列表页（`thumbSize` 透传设置，默 0 原图）。 */
-  async getGalleryList(site: EhSite, url: string, thumbSize: number = 0): Promise<GalleryInfo[]> {
+  /** 拉取并解析画廊列表页（`thumbSize` 透传设置，默 0 原图）；同时返回站点给的下一页 URL。 */
+  async getGalleryList(site: EhSite, url: string, thumbSize: number = 0): Promise<GalleryListPage> {
     const headers: Record<string, string> = {};
     headers['Referer'] = EhUrl.referer(site);
 
@@ -83,11 +84,11 @@ export class EhClient {
     if (err !== null) {
       throw err;
     }
-    const list: GalleryInfo[] = GalleryListParser.parse(resp.body, thumbSize);
-    if (list.length === 0) {
+    const page: GalleryListPage = GalleryListParser.parsePage(resp.body, thumbSize);
+    if (page.items.length === 0) {
       Logger.error('List', `parse empty url=${url} len=${resp.body.length} title=${htmlTitle(resp.body)}`);
     }
-    return list;
+    return page;
   }
 
   /** 拉取 `home.php` 并解析图片配额（My Home 第一块；未登录返回 `ok=false`）。 */
@@ -197,7 +198,11 @@ export class EhClient {
    */
   async getCloudFavorites(site: EhSite, favCat: number, keyword: string, page: number,
     thumbSize: number = 0): Promise<FavPage> {
-    const url: string = EhUrl.favorites(site, favCat, keyword, page);
+    return this.getFavoritesPage(EhUrl.favorites(site, favCat, keyword, page), site, thumbSize);
+  }
+
+  /** 直接按 URL 取一页收藏（翻页时用站点给的 next，不再自己拼页码）。 */
+  async getFavoritesPage(url: string, site: EhSite, thumbSize: number = 0): Promise<FavPage> {
     const headers: Record<string, string> = { 'Referer': EhUrl.referer(site) };
     const opt: HttpRequestOptions = this.requestOptions(headers);
     const resp: HttpResponse = await this.http.get(url, opt);
@@ -207,11 +212,13 @@ export class EhClient {
       throw err;
     }
     const meta: FavMeta = parseFavMeta(resp.body);
+    const listPage: GalleryListPage = GalleryListParser.parsePage(resp.body, thumbSize);
     return {
-      items: GalleryListParser.parse(resp.body, thumbSize),
+      items: listPage.items,
       cats: meta.cats,
       counts: meta.counts,
-      order: meta.order
+      order: meta.order,
+      next: listPage.next
     };
   }
 

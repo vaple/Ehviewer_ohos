@@ -36,12 +36,18 @@ export default function galleryListParserTest() {
       expect(list.length).assertEqual(1);
       expect(list[0].pages).assertEqual(0);
     });
-    it('next_page_from_page_param', 0, () => {
-      // 根列表页用 `next=` 游标（非页码）→ -1
-      expect(GalleryListParser.parseNextPage(GALLERY_LIST_HTML)).assertEqual(-1);
-      // 搜索/标签页用 `page=` 页码
-      expect(GalleryListParser.parseNextPage('<a href="https://e-hentai.org/?page=2">Next</a>')).assertEqual(2);
-      expect(GalleryListParser.parseNextPage('<div></div>')).assertEqual(-1);
+    it('next_page_from_pager_controls', 0, () => {
+      // `ptt` 最后一格的 `<a>` 是下一页（排行）；`#dnext` 是搜索/收藏/订阅的游标链接。
+      const ptt: string =
+        '<table class="ptt"><tr><td class="ptdd">&lt;</td>' +
+        '<td><a href="https://e-hentai.org/toplist.php?tl=15&amp;p=1">&gt;</a></td></tr></table>';
+      expect(GalleryListParser.parsePage(ptt).next).assertEqual('https://e-hentai.org/toplist.php?tl=15&p=1');
+      const dnext: string = '<div class="searchnav"><a id="dnext" href="https://e-hentai.org/?f_search=x&amp;next=9">Next</a></div>';
+      expect(GalleryListParser.parsePage(dnext).next).assertEqual('https://e-hentai.org/?f_search=x&next=9');
+      // 单页时 `#dnext` 是 `<span>`（没有 href），`ptt` 末页的 `>` 也没有 `<a>` → 都是 null。
+      expect(GalleryListParser.parsePage('<div class="searchnav"><span id="dnext">Next</span></div>').next === null).assertTrue();
+      expect(GalleryListParser.parsePage('<table class="ptt"><tr><td>&gt;</td></tr></table>').next === null).assertTrue();
+      expect(GalleryListParser.parsePage('<div></div>').next === null).assertTrue();
     });
 
     it('ex_thumb_rewritten_to_ehgt', 0, () => {
