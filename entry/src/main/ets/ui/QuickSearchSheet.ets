@@ -85,7 +85,7 @@ export struct QuickSearchSheet {
       }
     }
     .width('100%')
-    // 不铺不透明底：sheet 的官方材质由 `SheetOptions.systemMaterial` 提供，铺底色会把材质整块盖死。
+    // 不铺不透明底：半模态材质由全局开关（module.json5）提供，铺底色会把材质整块盖死。
     .backgroundColor(Color.Transparent)
     .onAppear(() => {
       this.reload();

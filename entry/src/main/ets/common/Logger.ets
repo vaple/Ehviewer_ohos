@@ -15,6 +15,11 @@ export class Logger {
     DiagLog.append('I', tag, message);
   }
 
+  static warn(tag: string, message: string): void {
+    hilog.warn(DOMAIN, tag, '%{public}s', message);
+    DiagLog.append('W', tag, message);
+  }
+
   static error(tag: string, message: string): void {
     hilog.error(DOMAIN, tag, '%{public}s', message);
     DiagLog.append('E', tag, message);

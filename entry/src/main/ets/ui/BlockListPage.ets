@@ -151,7 +151,7 @@ export struct BlockListPage {
           })
         SymbolGlyph($r('sys.symbol.plus'))
           .fontSize(20)
-          .fontColor([$r('app.color.brand')])
+          .fontColor([$r('sys.color.brand')])
           .padding(12)
           .accessibilityText('添加排除规则')
           .onClick(() => {
@@ -295,7 +295,7 @@ export struct BlockListPage {
             Column({ space: 2 }) {
               Text(si.item.token)
                 .fontSize(12)
-                .fontColor($r('app.color.brand'))
+                .fontColor($r('sys.color.brand'))
                 .width('100%')
               Text(si.item.desc)
                 .fontSize(12)

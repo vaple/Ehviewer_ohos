@@ -16,7 +16,7 @@ import { GalleryListPage } from '../parser/GalleryListParser';
 import { GalleryRowItem, loadMissingThumbs, rowLine1, rowLine2, toDetailPreview } from './GalleryRow';
 import { catLabel } from './CategoryStyle';
 import { FavCatSheet, FavCatOption } from './FavCatSheet';
-import { SHEET_MATERIAL, PAGE_PADDING, TOUCH_MIN } from './Materials';
+import { PAGE_PADDING, TOUCH_MIN } from './Materials';
 import { navTitleBarStyle, TITLE_BAR_H } from './NavStyle';
 
 /**
@@ -431,7 +431,7 @@ export struct FavoritesPage {
                 SymbolGlyph($r('sys.symbol.checkmark_circle'))
                   .fontSize(20)
                   .fontColor([this.selectMode
-                    ? $r('app.color.brand') : $r('app.color.text_secondary')])
+                    ? $r('sys.color.brand') : $r('app.color.text_secondary')])
                   .width(TOUCH_MIN)
                   .height(TOUCH_MIN)
                   .padding(6)
@@ -524,10 +524,10 @@ export struct FavoritesPage {
               Row({ space: 4 }) {
                 SymbolGlyph($r('sys.symbol.square_and_pencil'))
                   .fontSize(16)
-                  .fontColor([$r('app.color.brand')])
+                  .fontColor([$r('sys.color.brand')])
                 Text('移动到')
                   .fontSize(13)
-                  .fontColor($r('app.color.brand'))
+                  .fontColor($r('sys.color.brand'))
               }
               .padding(8)
               .onClick(() => {
@@ -584,7 +584,6 @@ export struct FavoritesPage {
         title: { title: '移动到收藏夹' },
         // 内容是 List（无固有高度，`FIT_CONTENT` 量不出来）：半屏起步，可上拖到全屏。
         detents: [SheetSize.MEDIUM, SheetSize.LARGE],
-        systemMaterial: SHEET_MATERIAL,
         onDisappear: () => {
           this.moveGid = -1;
           this.moveToken = '';

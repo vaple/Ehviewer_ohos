@@ -14,7 +14,7 @@ import { SearchPage } from './SearchPage';
 import { ReaderPage } from './ReaderPage';
 import { SettingsPage } from './SettingsPage';
 import { DownloadsPage } from './DownloadsPage';
-import { HDS_MATERIAL, PAGE_PADDING, SHEET_MATERIAL } from './Materials';
+import { HDS_MATERIAL, PAGE_PADDING } from './Materials';
 import { RANK_CHIPS_H, TITLE_BAR_H } from './NavStyle';
 import { RANK_RANGES, RankState } from '../state/RankState';
 import { SessionState } from '../state/SessionState';
@@ -210,11 +210,11 @@ export struct AppShell {
       SymbolGlyph($r('sys.symbol.flame'))
         .fontSize(22)
         .fontColor([this.currentTab === 0
-          ? $r('app.color.brand') : $r('app.color.text_secondary')])
+          ? $r('sys.color.brand') : $r('app.color.text_secondary')])
       Text('热门')
         .fontSize(11)
         .fontColor(this.currentTab === 0
-          ? $r('app.color.brand') : $r('app.color.text_secondary'))
+          ? $r('sys.color.brand') : $r('app.color.text_secondary'))
     }
     .padding({ top: 4, bottom: 4 })
   }
@@ -225,11 +225,11 @@ export struct AppShell {
       SymbolGlyph($r('sys.symbol.bell'))
         .fontSize(22)
         .fontColor([this.currentTab === 1
-          ? $r('app.color.brand') : $r('app.color.text_secondary')])
+          ? $r('sys.color.brand') : $r('app.color.text_secondary')])
       Text('订阅')
         .fontSize(11)
         .fontColor(this.currentTab === 1
-          ? $r('app.color.brand') : $r('app.color.text_secondary'))
+          ? $r('sys.color.brand') : $r('app.color.text_secondary'))
     }
     .padding({ top: 4, bottom: 4 })
   }
@@ -240,11 +240,11 @@ export struct AppShell {
       SymbolGlyph($r('sys.symbol.ranking_fill'))
         .fontSize(22)
         .fontColor([this.currentTab === 2
-          ? $r('app.color.brand') : $r('app.color.text_secondary')])
+          ? $r('sys.color.brand') : $r('app.color.text_secondary')])
       Text('排行')
         .fontSize(11)
         .fontColor(this.currentTab === 2
-          ? $r('app.color.brand') : $r('app.color.text_secondary'))
+          ? $r('sys.color.brand') : $r('app.color.text_secondary'))
     }
     .padding({ top: 4, bottom: 4 })
   }
@@ -255,11 +255,11 @@ export struct AppShell {
       SymbolGlyph($r('sys.symbol.person'))
         .fontSize(22)
         .fontColor([this.currentTab === 3
-          ? $r('app.color.brand') : $r('app.color.text_secondary')])
+          ? $r('sys.color.brand') : $r('app.color.text_secondary')])
       Text('我的')
         .fontSize(11)
         .fontColor(this.currentTab === 3
-          ? $r('app.color.brand') : $r('app.color.text_secondary'))
+          ? $r('sys.color.brand') : $r('app.color.text_secondary'))
     }
     .padding({ top: 4, bottom: 4 })
   }
@@ -485,7 +485,6 @@ export struct AppShell {
     .bindSheet($$this.updatePromptOpen, this.updatePromptSheet(), {
       title: { title: `发现新版本 ${this.promptVersion}` },
       height: SheetSize.MEDIUM,
-      systemMaterial: SHEET_MATERIAL,
       onDisappear: () => {
         this.updatePromptOpen = false;
       }

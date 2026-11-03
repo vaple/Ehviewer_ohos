@@ -28,7 +28,7 @@ import { QuickSearchDao } from '../db/dao/QuickSearchDao';
 import { QuickSearch } from '../model/QuickSearch';
 import { hasSavedKeyword } from '../search/QuickSearchQuery';
 import { QuickSearchSheet } from './QuickSearchSheet';
-import { CARD_GAP, CARD_RADIUS, PAGE_PADDING, SHEET_MATERIAL, TOUCH_MIN } from './Materials';
+import { CARD_GAP, CARD_RADIUS, PAGE_PADDING, TOUCH_MIN } from './Materials';
 import { navTitleBarStyle, TITLE_BAR_H } from './NavStyle';
 import { RefreshSpinner } from './RefreshSpinner';
 
@@ -676,7 +676,7 @@ export struct SearchPage {
         Row({ space: 6 }) {
           SymbolGlyph($r('sys.symbol.line_3_horizontal'))
             .fontSize(20)
-            .fontColor([$r('app.color.brand')])
+            .fontColor([$r('sys.color.brand')])
             .width(TOUCH_MIN)
             .height(SUMMARY_ROW_H)
             .padding(6)
@@ -830,11 +830,10 @@ export struct SearchPage {
               .each((ri: RepeatItem<CatItem>) => {
                 ChipV2({
                   chipV2Options: new ChipV2Options({
-                    label: new ChipV2Label({ text: ri.item.label, activatedFontColor: ColorMetrics.resourceColor($r('app.color.chip_active_text')) }),
+                    label: new ChipV2Label({ text: ri.item.label }),
                     size: ChipV2Size.SMALL,
                     allowClose: false,
                     activated: this.selectedBits.indexOf(ri.item.bit) >= 0,
-                    activatedBackgroundColor: ColorMetrics.resourceColor($r('app.color.chip_active_bg')),
                     onClicked: () => {
                       const at: number = this.selectedBits.indexOf(ri.item.bit);
                       if (at >= 0) {
@@ -865,11 +864,10 @@ export struct SearchPage {
               .each((ri: RepeatItem<ScopeItem>) => {
                 ChipV2({
                   chipV2Options: new ChipV2Options({
-                    label: new ChipV2Label({ text: ri.item.label, activatedFontColor: ColorMetrics.resourceColor($r('app.color.chip_active_text')) }),
+                    label: new ChipV2Label({ text: ri.item.label }),
                     size: ChipV2Size.SMALL,
                     allowClose: false,
                     activated: this.scopes.indexOf(ri.item.key) >= 0,
-                    activatedBackgroundColor: ColorMetrics.resourceColor($r('app.color.chip_active_bg')),
                     onClicked: () => {
                       if (this.scopes.indexOf(ri.item.key) >= 0) {
                         this.scopes = this.scopes.filter((k: string) => k !== ri.item.key);
@@ -904,7 +902,7 @@ export struct SearchPage {
               .selected(this.selectedLang.length > 0 ? SEARCH_LANGUAGES.indexOf(this.selectedLang) + 1 : 0)
               .value(this.selectedLang.length > 0 ? this.selectedLang : LANG_ANY)
               .font({ size: 14 })
-              .fontColor($r('app.color.brand'))
+              .fontColor($r('sys.color.brand'))
               .backgroundColor(Color.Transparent)
               .onSelect((index: number) => {
                 const next: string = index === 0 ? '' : SEARCH_LANGUAGES[index - 1];
@@ -977,11 +975,10 @@ export struct SearchPage {
               .each((ri: RepeatItem<number>) => {
                 ChipV2({
                   chipV2Options: new ChipV2Options({
-                    label: new ChipV2Label({ text: `${ri.item}+`, activatedFontColor: ColorMetrics.resourceColor($r('app.color.chip_active_text')) }),
+                    label: new ChipV2Label({ text: `${ri.item}+` }),
                     size: ChipV2Size.SMALL,
                     allowClose: false,
                     activated: this.minRating === ri.item,
-                    activatedBackgroundColor: ColorMetrics.resourceColor($r('app.color.chip_active_bg')),
                     onClicked: () => {
                       this.minRating = this.minRating === ri.item ? -1 : ri.item;
                       this.searchController.stopEditing();
@@ -1028,13 +1025,11 @@ export struct SearchPage {
                 ChipV2({
                   chipV2Options: new ChipV2Options({
                     label: new ChipV2Label({
-                      text: '有种子',
-                      activatedFontColor: ColorMetrics.resourceColor($r('app.color.chip_active_text'))
+                      text: '有种子'
                     }),
                     size: ChipV2Size.SMALL,
                     allowClose: false,
                     activated: this.onlyTorrents,
-                    activatedBackgroundColor: ColorMetrics.resourceColor($r('app.color.chip_active_bg')),
                     onClicked: () => {
                       this.onlyTorrents = !this.onlyTorrents;
                       this.searchController.stopEditing();
@@ -1046,13 +1041,11 @@ export struct SearchPage {
                 ChipV2({
                   chipV2Options: new ChipV2Options({
                     label: new ChipV2Label({
-                      text: '忽略站点过滤',
-                      activatedFontColor: ColorMetrics.resourceColor($r('app.color.chip_active_text'))
+                      text: '忽略站点过滤'
                     }),
                     size: ChipV2Size.SMALL,
                     allowClose: false,
                     activated: this.ignoreFilters,
-                    activatedBackgroundColor: ColorMetrics.resourceColor($r('app.color.chip_active_bg')),
                     onClicked: () => {
                       this.ignoreFilters = !this.ignoreFilters;
                       this.searchController.stopEditing();
@@ -1197,7 +1190,6 @@ export struct SearchPage {
       title: { title: '快速搜索' },
       // 内容是 List（无固有高度，`FIT_CONTENT` 量不出来）：半屏起步，可上拖到全屏。
       detents: [SheetSize.MEDIUM, SheetSize.LARGE],
-      systemMaterial: SHEET_MATERIAL
     })
     .onAppear(() => {
       if (this.kind === 'keyword') {

@@ -170,7 +170,7 @@ export struct DownloadsPage {
         } else if (item.state !== DownloadState.DONE) {
           SymbolGlyph($r('sys.symbol.play_fill'))
             .fontSize(20)
-            .fontColor([$r('app.color.brand')])
+            .fontColor([$r('sys.color.brand')])
             .padding(12)
             .accessibilityText('继续下载')
             .onClick(() => {
@@ -191,7 +191,7 @@ export struct DownloadsPage {
       if (item.state !== DownloadState.DONE && item.pages > 0) {
         Progress({ value: item.donePages, total: item.pages, type: ProgressType.Linear })
           .width('100%')
-          .color(item.state === DownloadState.FAILED ? $r('app.color.danger') : $r('app.color.brand'))
+          .color(item.state === DownloadState.FAILED ? $r('app.color.danger') : $r('sys.color.brand'))
       }
       if (item.message.length > 0) {
         Text(item.message)

@@ -21,18 +21,6 @@
       "value": "#8C8C8C"
     },
     {
-      "name": "brand",
-      "value": "#3D6BE5"
-    },
-    {
-      "name": "chip_active_bg",
-      "value": "#1A3D6BE5"
-    },
-    {
-      "name": "chip_active_text",
-      "value": "#3D6BE5"
-    },
-    {
       "name": "chip_danger_bg",
       "value": "#1AD93025"
     },

@@ -58,6 +58,6 @@ export function catColor(cat: number): ResourceColor {
     case CATEGORY_WESTERN:
       return $r('app.color.cat_western');
     default:
-      return $r('app.color.brand');
+      return $r('sys.color.comp_background_emphasize');
   }
 }

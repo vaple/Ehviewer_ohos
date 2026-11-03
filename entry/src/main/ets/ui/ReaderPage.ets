@@ -24,7 +24,7 @@ import { AppSettings } from '../state/AppSettings';
 import { HdsNavDestination } from '@kit.UIDesignKit';
 import { ReadingProgressStore } from '../state/ReadingProgressStore';
 import { WindowState } from '../state/WindowState';
-import { READER_SHEET_H, SHEET_MATERIAL, TOUCH_MIN } from './Materials';
+import { READER_SHEET_H, TOUCH_MIN } from './Materials';
 import { TITLE_BAR_H } from './NavStyle';
 import { setDiagContext } from '../service/CrashCollector';
 
@@ -56,10 +56,10 @@ struct ReaderImageItem {
         Column({ space: 8 }) {
           SymbolGlyph($r('sys.symbol.arrow_clockwise'))
             .fontSize(30)
-            .fontColor([$r('app.color.brand')])
+            .fontColor([$r('sys.color.brand')])
           Text('重新加载')
             .fontSize(13)
-            .fontColor($r('app.color.brand'))
+            .fontColor($r('sys.color.brand'))
         }
         .padding(24)
         .onClick(() => {
@@ -747,10 +747,10 @@ export struct ReaderPage {
       Column({ space: 8 }) {
         SymbolGlyph($r('sys.symbol.arrow_clockwise'))
           .fontSize(30)
-          .fontColor([$r('app.color.brand')])
+          .fontColor([$r('sys.color.brand')])
         Text('重新加载')
           .fontSize(13)
-          .fontColor($r('app.color.brand'))
+          .fontColor($r('sys.color.brand'))
       }
       .padding(24)
       .onClick(() => {
@@ -1147,7 +1147,6 @@ export struct ReaderPage {
       title: { title: '阅读选项' },
       // 默认挡位是 LARGE（近全屏），这 3 行设置会剩一大片空白（真机 `FIT_CONTENT` 不生效，见 READER_SHEET_H）。
       detents: [READER_SHEET_H],
-      systemMaterial: SHEET_MATERIAL
     })
     .onReady((ctx: NavDestinationContext) => {
       this.pageStack = ctx.pathStack;

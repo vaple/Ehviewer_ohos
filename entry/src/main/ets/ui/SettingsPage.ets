@@ -14,7 +14,7 @@ import { SessionState } from '../state/SessionState';
 import { WindowState } from '../state/WindowState';
 import { DownloadSettings, downloadSettings, clampConcurrency } from '../state/DownloadSettings';
 import { HdsListItemCard, HdsNavDestination, PrefixIcon, SuffixArrow, SuffixBadge, SuffixButton, SuffixSelect, SuffixSwitch } from '@kit.UIDesignKit';
-import { CARD_GAP, CARD_RADIUS, PAGE_PADDING, SHEET_MATERIAL } from './Materials';
+import { CARD_GAP, CARD_RADIUS, PAGE_PADDING } from './Materials';
 import { TITLE_BAR_H } from './NavStyle';
 import { BundleStorage, CacheManager } from '../service/CacheManager';
 import { formatBytes } from '../common/Bytes';
@@ -715,7 +715,7 @@ export struct SettingsPage {
         Button('在系统设置中查看')
           .width('100%')
           .backgroundColor(Color.Transparent)
-          .fontColor($r('app.color.brand'))
+          .fontColor($r('sys.color.brand'))
           .onClick(() => {
             this.sheetOpen = false;
             this.openSystemStorage();
@@ -1073,7 +1073,6 @@ export struct SettingsPage {
       title: { title: this.sheetTitle() },
       // 存储明细只有四行 + 两个按钮：按内容高度贴合；另外两张沿用默认两档（内容更高，能拉大）。
       detents: this.sheetKind === 3 ? [SheetSize.FIT_CONTENT] : [SheetSize.MEDIUM, SheetSize.LARGE],
-      systemMaterial: SHEET_MATERIAL,
       onDisappear: () => {
         this.sheetOpen = false;
       }

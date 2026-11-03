@@ -37,7 +37,7 @@ import { CATEGORY_UNKNOWN, languageOf } from '../parser/ParserUtils';
 import { tagQueryOf, GalleryDetailParser } from '../parser/GalleryDetailParser';
 import { errorText } from '../common/ErrorText';
 import { catColor, catLabel } from './CategoryStyle';
-import { CARD_RADIUS, ACTION_BAR_BTN_H, ACTION_BAR_H, ACTION_BAR_MARGIN, HDS_MATERIAL, JUMP_SHEET_H, PAGE_PADDING, SHEET_MATERIAL, THUMB_RADIUS, TOUCH_MIN, commentScoreColor } from './Materials';
+import { CARD_RADIUS, ACTION_BAR_BTN_H, ACTION_BAR_H, ACTION_BAR_MARGIN, HDS_MATERIAL, JUMP_SHEET_H, PAGE_PADDING, THUMB_RADIUS, TOUCH_MIN, commentScoreColor } from './Materials';
 import { commentDateText, commentScoreText } from '../common/CommentText';
 import { galleryGeometryId } from './GalleryRow';
 import { SkeletonBlock } from './Skeleton';
@@ -199,7 +199,7 @@ export struct GalleryDetailPage {
     .width(this.readPillWidth)
     .height(ACTION_BAR_BTN_H)
     .justifyContent(FlexAlign.Center)
-    .backgroundColor($r('app.color.brand'))
+    .backgroundColor($r('sys.color.comp_background_emphasize'))
     .borderRadius(ACTION_BAR_BTN_H / 2)
     // 官方点击回弹：主按钮是自建内容，动作条只负责背板，不会替它加按压态。
     .clickEffect({ level: ClickEffectLevel.LIGHT })
@@ -797,7 +797,7 @@ export struct GalleryDetailPage {
       if (this.downloadStatus.length > 0) {
         Text(this.downloadStatus)
           .fontSize(12)
-          .fontColor($r('app.color.brand'))
+          .fontColor($r('sys.color.brand'))
           .width('100%')
       }
       Text('画质')
@@ -808,13 +808,11 @@ export struct GalleryDetailPage {
         ChipV2({
           chipV2Options: new ChipV2Options({
             label: new ChipV2Label({
-              text: '原图',
-              activatedFontColor: ColorMetrics.resourceColor($r('app.color.chip_active_text'))
+              text: '原图'
             }),
             size: ChipV2Size.SMALL,
             allowClose: false,
             activated: this.dlQuality === DownloadQuality.ORIGINAL,
-            activatedBackgroundColor: ColorMetrics.resourceColor($r('app.color.chip_active_bg')),
             onClicked: () => {
               this.dlQuality = DownloadQuality.ORIGINAL;
             }
@@ -823,13 +821,11 @@ export struct GalleryDetailPage {
         ChipV2({
           chipV2Options: new ChipV2Options({
             label: new ChipV2Label({
-              text: '站点尺寸',
-              activatedFontColor: ColorMetrics.resourceColor($r('app.color.chip_active_text'))
+              text: '站点尺寸'
             }),
             size: ChipV2Size.SMALL,
             allowClose: false,
             activated: this.dlQuality === DownloadQuality.SITE,
-            activatedBackgroundColor: ColorMetrics.resourceColor($r('app.color.chip_active_bg')),
             onClicked: () => {
               this.dlQuality = DownloadQuality.SITE;
             }
@@ -1271,7 +1267,7 @@ export struct GalleryDetailPage {
             Text(this.comments.length > 0
               ? `${this.comments.length} 条评论 · 查看全部` : '去评论')
               .fontSize(13)
-              .fontColor($r('app.color.brand'))
+              .fontColor($r('sys.color.brand'))
               .layoutWeight(1)
           }
           .width('100%')
@@ -1391,8 +1387,7 @@ export struct GalleryDetailPage {
         detents: this.sheetKind === 3
           ? [JUMP_SHEET_H]
           : [SheetSize.MEDIUM, SheetSize.LARGE],
-        // 官方半模态材质。低算力设备上材质会退化成纯色背景，这是平台行为，不是参数没调对。
-        systemMaterial: SHEET_MATERIAL,
+        // 半模态材质由全局开关（module.json5）提供，这里不再重复设置。
         onDisappear: () => {
           this.showSheet = false;
           // 跳页选中后在这里进阅读器：等半模态退场，别和页面转场抢同一帧。
@@ -1432,7 +1427,7 @@ export struct GalleryDetailPage {
           value: [{
             content: {
               icon: new SymbolGlyphModifier($r(this.isFavorited ? 'sys.symbol.heart_fill' : 'sys.symbol.heart'))
-                .fontColor([this.isFavorited ? $r('app.color.brand') : $r('app.color.text_secondary')]),
+                .fontColor([this.isFavorited ? $r('sys.color.brand') : $r('app.color.text_secondary')]),
               action: () => {
                 this.openFavSheet();
               }
