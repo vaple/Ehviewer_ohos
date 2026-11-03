@@ -110,6 +110,35 @@ export function unescapeField(raw: string): string {
  * `#tags` 严格递增（含唯一）、每行列数。之所以用原始（未转义）key 校验递增：查询时比对的也是未转义 key，
  * 转义序与解码序在包含 TAB/LF 的极端值上会不一致，按转义序放行会让二分漏命中。
  */
+/**
+ * 只读头部：返回 `#source` 行的生成时间（ISO8601 UTC）。
+ *
+ * 为的是让加载器在不解析整份快照的前提下判断「内置的比沙箱新不新」——头部两行约 80 B，
+ * 而完整解析是 3.1 MB。**不抛错**（与 `parseTagDb` 相反）：它是优化入口，缺元信息只该退回
+ * 完整比较，不该把启动变成失败。
+ *
+ * 首行版本必须与 `TAGDB_FORMAT` 一致、第二行必须正好 `#source\t<sha>\t<builtAt>`，
+ * 否则返回 undefined（格式不合规的旁证，交给完整路径去判）。
+ */
+export function peekBuiltAt(text: string): string | undefined {
+  if (peekFormat(text) !== TAGDB_FORMAT) {
+    return undefined;
+  }
+  const first: number = text.indexOf('\n');
+  if (first < 0) {
+    return undefined;
+  }
+  const second: number = text.indexOf('\n', first + 1);
+  if (second < 0) {
+    return undefined;
+  }
+  const cols: string[] = text.substring(first + 1, second).split('\t');
+  if (cols.length !== 3 || cols[0] !== SEG_SOURCE || cols[2].length === 0) {
+    return undefined;
+  }
+  return cols[2];
+}
+
 export function parseTagDb(text: string): TagDbData {
   // 格式规定换行只用 LF、字段内 CR 必须已被丢弃；出现裸 CR 说明文件被别的工具用 CRLF 写过，
   // 那样每行末尾都会带一个不可见字符，译名/释义里嵌 CR，UI 上表现为莫名换行——直接拒绝。

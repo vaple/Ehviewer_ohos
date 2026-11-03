@@ -20,6 +20,8 @@
 
 # 标签翻译快照：构建期生成（scripts/tagdb/build_tagdb.py --ensure），不入库
 /entry/src/main/resources/rawfile/tagdb.v1.tsv
+# 条件请求用的 ETag：纯构建缓存（--ensure 复用，避免每次重新下载 4.3 MB）
+/.tagdb/
 
 /docs/*
 !/docs/screenshots/

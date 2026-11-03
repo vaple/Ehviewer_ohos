@@ -16,17 +16,16 @@
     # 只校验：已生成的产物与当前源数据是否同步（不联网、不写文件）
     python scripts/tagdb/build_tagdb.py --src ... --check
 
-    # 写到别处（调试 / 对比新旧格式）；此时不碰内置常量模块
+    # 写到别处（调试 / 对比新旧格式）；此时不碰构建缓存里的 ETag
     python scripts/tagdb/build_tagdb.py --src ... --out build/tagdb.debug.tsv
 
-除 TSV 外还同步生成 `entry/src/main/ets/tagdb/TagDbBuiltin.ets`（内置快照的 `sha` / 生成时间 / 条数）。
-加载器靠它零成本判断"沙箱里那份是不是比内置新"，不必为了比时间先解析整份 3 MB TSV；
-`--check` 会把这份模块与 TSV 的 `#source` 逐字比对，忘了重新生成会直接非 0 退出。
+除 TSV 外**不生成任何源码文件**：内置快照的 `#source` 头（sha + 生成时间）就是元信息的唯一真源，
+加载器用 fd 只读前 256 B 就能拿到它（`TagDb.readBundledBuiltAt`），不必为一行时间解析整份 3.1 MB。
 
 **产物为什么不入库**：这份快照是第三方词典数据（数万条标签与释义），入库会让 GitCode 等镜像仓把整份内容
 当成源码扫描（本仓库在那边有镜像）。所以它变成**构建期生成物**：`--ensure` 读本地 TSV 的 `#source`
 与上游 release 分支的最新 sha 比对，缺失或不一致才重新下载（4.3 MB）生成；一致时只有一个几 KB 的请求。
-伴生的 `TagDbBuiltin.ets` 只有 sha / 时间 / 条数，正常入库，保证 clone 后无需联网也能编译。
+条件请求用的 ETag 存在 gitignored 的 `.tagdb/etag`（纯构建缓存，与产物无关）。
 
 代价（已与用户确认）：构建与门禁需要联网；`python` 必须在 PATH 里。
 
@@ -53,8 +52,9 @@ SOURCE_URL = "https://raw.githubusercontent.com/EhTagTranslation/Database/releas
 # 脚本在 scripts/tagdb/ 下，往上两级是仓库根；默认输出跟着仓库走，不依赖 cwd。
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUT = REPO_ROOT / "entry/src/main/resources/rawfile/tagdb.v1.tsv"
-# 内置 TSV 的伴生常量模块：加载器用它在**不解析 3.1 MB 快照**的前提下判断沙箱副本是否够新。
-DEFAULT_BUILTIN_TS = REPO_ROOT / "entry/src/main/ets/tagdb/TagDbBuiltin.ets"
+# 上一次条件请求的 ETag（构建缓存，gitignored）：只决定"要不要重新下载 4.3 MB"，
+# 与随包分发的内容无关，因此不进产物、也不进源码。
+ETAG_FILE = REPO_ROOT / ".tagdb" / "etag"
 
 FORMAT_VERSION = 1
 # `rows` 是上游的命名空间索引（伪命名空间），只进 `#rows` 的中文名表，不重复进 `#tags`。
@@ -305,69 +305,38 @@ def without_built_at(text: str) -> str:
     return "\n".join(out)
 
 
-def render_builtin_ts(sha: str, built_at: str, count: int, etag: str) -> str:
-    """内置快照元信息 → ArkTS 常量模块文本（生成与 `--check` 共用同一份逻辑）。
-
-    为什么要有这个模块：加载器要判断"沙箱里那份是否比内置新"，而为了比时间先去读内置 TSV，
-    就白白付掉一次 3 MB 解析——正是这个模块要省的成本。
-    值必须与 TSV 的 `#source` 同源，所以两处都不允许手改。
-    `BUILTIN_ETAG` 是上游 HTTP 的 ETag，只给构建期做条件请求；本地无从推导，用 `--src` 生成时为空串。
-    """
-    return (
-        "/**\n"
-        " * 内置快照 `rawfile/tagdb.v1.tsv` 的元信息。\n"
-        " *\n"
-        " * **由 `scripts/tagdb/build_tagdb.py` 生成，不要手改**：值与 TSV 的 `#source` 是同一次生成的产物，\n"
-        " * `--check` 会逐字比对；手改等于让「内置快照的生成时间」和实际文件说的不是一回事。\n"
-        " *\n"
-        " * 为什么编成常量：加载器要判断沙箱副本是否比内置新。读 TSV 头部得先把整份 3 MB 文本读进来，\n"
-        " * 而省掉这一步正是冷启动的目标；编进代码后比较只是一次字符串比较。\n"
-        " *\n"
-        " * `BUILTIN_ETAG` 只被构建期用（条件请求判断上游有没有变），运行期从不读它。\n"
-        " */\n"
-        f"export const BUILTIN_SHA: string = '{sha}';\n"
-        f"export const BUILTIN_BUILT_AT: string = '{built_at}';\n"
-        f"export const BUILTIN_COUNT: number = {count};\n"
-        f"export const BUILTIN_ETAG: string = '{etag}';\n"
-    )
+def read_etag() -> str:
+    """构建缓存里的 ETag；缺失/读不出返回空串（表示没法用条件请求，只能完整下载）。"""
+    try:
+        return ETAG_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
-def write_builtin(path: Path, summary: dict, etag: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8", newline="") as f:
-        f.write(render_builtin_ts(summary["sha"], summary["built_at"], summary["tags"], etag))
-    print(f"wrote {path} bytes={path.stat().st_size}")
+def write_etag(etag: str) -> None:
+    """记录本次条件请求拿到的 ETag；空串 = 清掉（下次完整下载）。"""
+    try:
+        if etag:
+            ETAG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            ETAG_FILE.write_text(etag, encoding="utf-8")
+        elif ETAG_FILE.is_file():
+            ETAG_FILE.unlink()
+    except OSError as exc:
+        # 写不进缓存最多让下次多下一次 4.3 MB，不值得让构建失败。
+        print(f"warn: 写入 {ETAG_FILE} 失败：{exc}", file=sys.stderr)
 
 
-def check_committed(out: Path, text: str, builtin_ts: Path | None) -> None:
+def check_committed(out: Path, text: str) -> None:
     if not out.is_file():
         # 产物缺失时以前只打印一行就 exit 0：发版门禁会把"还没生成"当"通过"（假绿）。
         fail(f"已入库的产物不存在：{out}（先不带 --check 生成并提交）")
     with open(out, encoding="utf-8", newline="") as f:
         committed = f.read()
     # 先按同一套规则验一遍已入库的文件：不一致时才能区分"数据过期"与"文件被 CRLF/BOM 弄坏"。
-    committed_summary = validate(committed)
+    validate(committed)
     if without_built_at(committed) != without_built_at(text):
         fail(f"已入库的 {out} 与当前源数据不一致（源数据更新了？重跑不带 --check 生成后重新提交）")
     print("file=in-sync")
-    if builtin_ts is None:
-        # 非默认 --out 是调试 / 对比用，不该要求仓库里的内置常量跟着它走。
-        print("builtin=skipped (non-default --out)")
-        return
-    if not builtin_ts.is_file():
-        fail(f"内置快照的常量模块不存在：{builtin_ts}（先不带 --check 生成并提交）")
-    with open(builtin_ts, encoding="utf-8", newline="") as f:
-        committed_ts = f.read()
-    # 期望值取自**已入库 TSV**（而不是本次生成的文本）：模块必须描述随包分发的那一份，
-    # 否则"忘了重新生成常量"会让加载器拿着过期时间做比较，静默选中错误的快照。
-    # ETag 沿用已入库模块里的值：它只影响构建期"要不要下载"，换一次不该让 --check 变红。
-    expected = render_builtin_ts(
-        committed_summary["sha"], committed_summary["built_at"], committed_summary["tags"],
-        builtin_etag(builtin_ts),
-    )
-    if committed_ts != expected:
-        fail(f"已入库的 {builtin_ts} 与 {out} 的 #source 不一致（重跑不带 --check 生成后重新提交）")
-    print("builtin=in-sync")
 
 
 def now_iso() -> str:
@@ -397,7 +366,7 @@ def fetch_source(etag: str | None) -> tuple[dict | None, str]:
     为什么不用 GitHub API 拿最新 sha：匿名 API 每小时只有 60 次，本机实测会被限流
     （返回 `{"message": ...}` 而不是提交列表），一限流就得退化成"每次构建都下 4.3 MB"。
     `raw.githubusercontent.com` 支持 `If-None-Match`，命中时回 304、几乎不传字节，更适合当钩子。
-    ETag 无从在本地推导，所以它跟着快照的元信息一起存在 `TagDbBuiltin.ets` 里。
+    ETag 无从在本地推导，所以它单独缓存在 gitignored 的 `.tagdb/etag`（与产物无关）。
     """
     headers = {"User-Agent": "ehviewer-ohos-build"}
     if etag:
@@ -417,31 +386,8 @@ def fetch_source(etag: str | None) -> tuple[dict | None, str]:
         raise SystemExit(f"下载上游快照失败：{exc}（构建需要联网，见 AGENTS.md §5）")
 
 
-def builtin_etag(path: Path) -> str:
-    """从已生成的常量模块里取 ETag；缺失/空串表示没法用条件请求。"""
-    if not path.is_file():
-        return ""
-    with open(path, encoding="utf-8") as f:
-        matched = re.search(r"export const BUILTIN_ETAG: string = '([^']*)'", f.read())
-    return matched.group(1) if matched else ""
-
-
-def builtin_in_sync(out: Path, builtin_ts: Path) -> bool:
-    """常量模块是否精确描述磁盘上这份 TSV（不联网；ETag 不参与，它只影响"要不要下载"）。"""
-    if not builtin_ts.is_file() or not out.is_file():
-        return False
-    with open(out, encoding="utf-8", newline="") as f:
-        summary = validate(f.read())
-    with open(builtin_ts, encoding="utf-8", newline="") as f:
-        committed = f.read()
-    expected = render_builtin_ts(
-        summary["sha"], summary["built_at"], summary["tags"], builtin_etag(builtin_ts)
-    )
-    return committed == expected
-
-
-def write_snapshot(doc: dict, out: Path, builtin_ts: Path | None, etag: str) -> dict:
-    """上游 JSON → 落盘 TSV（+ 常量模块）。`ensure` 与常规生成共用，避免两条写盘路径分叉。"""
+def write_snapshot(doc: dict, out: Path, etag: str) -> dict:
+    """上游 JSON → 落盘 TSV。`ensure` 与常规生成共用，避免两条写盘路径分叉。"""
     text = build(doc, now_iso())
     summary = validate(text)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -449,32 +395,24 @@ def write_snapshot(doc: dict, out: Path, builtin_ts: Path | None, etag: str) -> 
     with open(out, "w", encoding="utf-8", newline="") as f:
         f.write(text)
     print(f"wrote {out} bytes={out.stat().st_size}")
-    if builtin_ts is not None:
-        write_builtin(builtin_ts, summary, etag)
+    write_etag(etag)
     return summary
 
 
-def ensure(out: Path, builtin_ts: Path) -> int:
+def ensure(out: Path) -> int:
     """构建期补齐：本地快照与上游一致就立刻返回，否则重新生成。
 
     这是构建钩子（`hvigorfile.ts` preBuild）与 `scripts/package.py` 唯一的入口，
     "文件在不在 / 新不新"的判断只活在这一处。
     """
     local = local_snapshot_sha(out)
-    etag = builtin_etag(builtin_ts) if local is not None else ""
+    etag = read_etag() if local is not None else ""
     if local is not None and etag:
         doc, new_etag = fetch_source(etag)
         if doc is None:
-            if builtin_in_sync(out, builtin_ts):
-                print(f"ensure=up-to-date sha={local}")
-                return 0
-            # 快照在、常量没跟上（上次生成被中断 / 手删了常量）：用本地文件重建，不必联网。
-            with open(out, encoding="utf-8", newline="") as f:
-                summary = validate(f.read())
-            write_builtin(builtin_ts, summary, etag)
-            print(f"ensure=builtin-rebuilt sha={local}")
+            print(f"ensure=up-to-date sha={local}")
             return 0
-        summary = write_snapshot(doc, out, builtin_ts, new_etag)
+        summary = write_snapshot(doc, out, new_etag)
         print(f"ensure=regenerated sha={summary['sha']} tags={summary['tags']}")
         return 0
 
@@ -482,7 +420,7 @@ def ensure(out: Path, builtin_ts: Path) -> int:
     doc, new_etag = fetch_source(None)
     if doc is None:  # 理论上只有传了 etag 才会 304；这里防御一下，别写空文件
         raise SystemExit("上游回了 304 但本地没有可用快照，删掉 rawfile/tagdb.v1.tsv 后重试")
-    summary = write_snapshot(doc, out, builtin_ts, new_etag)
+    summary = write_snapshot(doc, out, new_etag)
     print(f"ensure=regenerated sha={summary['sha']} tags={summary['tags']}")
     return 0
 
@@ -507,14 +445,12 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     out = Path(args.out)
-    # 只有写默认产物时才维护内置常量模块：其它路径是调试 / 对比，不该改仓库里随包分发的那份。
-    is_default_out = out.resolve() == DEFAULT_OUT.resolve()
 
     if args.ensure:
         # 钩子只维护随包分发的那一份；指到别处说明调用方搞错了，直接报错而不是猜。
-        if not is_default_out:
+        if out.resolve() != DEFAULT_OUT.resolve():
             raise SystemExit(f"--ensure 只用于默认产物：{DEFAULT_OUT}（当前 --out={out}）")
-        return ensure(out, DEFAULT_BUILTIN_TS)
+        return ensure(out)
 
     etag = ""
     if args.src is None:
@@ -533,7 +469,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if args.check:
-        check_committed(out, text, DEFAULT_BUILTIN_TS if is_default_out else None)
+        check_committed(out, text)
         return 0
 
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -541,12 +477,12 @@ def main(argv: list[str] | None = None) -> int:
     with open(out, "w", encoding="utf-8", newline="") as f:
         f.write(text)
     print(f"wrote {out} bytes={out.stat().st_size}")
-    if is_default_out:
-        # 用 --src 生成时拿不到 HTTP ETag，先留空；下一次 --ensure 会完整下载一次把 ETag 补上。
-        write_builtin(DEFAULT_BUILTIN_TS, summary, etag)
+    if out.resolve() == DEFAULT_OUT.resolve():
+        # 用 --src 生成时拿不到 HTTP ETag（空串 = 清掉缓存），下一次 --ensure 会完整下载一次补上。
+        write_etag(etag)
     else:
-        # 非默认 --out 只用于调试 / 对比，绝不能顺手覆盖随包分发的内置常量。
-        print(f"builtin=skipped (non-default --out: {out})")
+        # 非默认 --out 只用于调试 / 对比，缓存里的 ETag 仍描述默认产物，不能动。
+        print(f"etag=kept (non-default --out: {out})")
     return 0
 
 

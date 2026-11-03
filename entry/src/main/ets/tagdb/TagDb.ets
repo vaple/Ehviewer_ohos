@@ -1,14 +1,14 @@
 import { common } from '@kit.AbilityKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
+import { resourceManager } from '@kit.LocalizationKit';
 import { Logger } from '../common/Logger';
 import { TagSettings, watchTagEnabled } from '../state/TagSettings';
 import { TagCandidate } from './TagCandidate';
 import { describeError } from './ErrorDescribe';
 import {
-  introOf, parseTagDb, peekFormat, searchTags, TAGDB_FORMAT, TagDbData, translateNsOf, translateTagOf
+  introOf, parseTagDb, peekBuiltAt, peekFormat, searchTags, TAGDB_FORMAT, TagDbData, translateNsOf, translateTagOf
 } from './TagDbFormat';
-import { BUILTIN_BUILT_AT } from './TagDbBuiltin';
 
 /**
  * 标签翻译快照的运行期单例：加载（按生成时间取沙箱或内置）/ 状态 / 重绘信号 / 查询入口。
@@ -20,6 +20,13 @@ import { BUILTIN_BUILT_AT } from './TagDbBuiltin';
 
 /** 沙箱副本与内置 rawfile 同名：更新流程写的就是这个名字，加载器不需要第二套常量。 */
 export const TAGDB_FILE: string = 'tagdb.v1.tsv';
+
+/**
+ * 读内置快照头部用的字节数。
+ * 头部固定两行：`#tagdb\t1\n`（9 B）+ `#source\t<40 位 sha>\t<20 位时间>\n`（70 B）≈ 80 B，取 256 留三倍余量。
+ * 这是**上限**不是目标：解析仍按行做，第二个换行没出现在窗口内就当作头部不可用。
+ */
+const BUNDLED_HEAD_BYTES: number = 256;
 
 /** `@Trace rev` 是唯一的重绘信号：数据装载、开关切换都会 +1。 */
 @ObservedV2
@@ -255,11 +262,13 @@ export class TagDb {
     // 先让出一拍：下面 `getRawFileContentSync` + 3.1 MB `parseTagDb` 全是同步的，
     // 在 `onAppear` 那一帧里做完会拖住首帧；让首帧先画出来再干重活。
     await TagDb.yieldTick();
-    // 沙箱那份只要不比内置旧就直接装：内置的生成时间是编译期常量，比较不必先把内置读进来，
-    // 冷启动因此省掉一次 3.1 MB 解析。但「能解析」本身不是理由——App 升级后内置会比沙箱新（spec §7），
+    // 沙箱那份只要不比内置旧就直接装：内置的生成时间从 rawfile 头部读（约 80 B，一次 fd 读），
+    // 不必解析整份 3.1 MB。但「能解析」本身不是理由——App 升级后内置会比沙箱新（spec §7），
     // 那种情况必须读内置并让两份比一次新旧，否则翻译会被旧沙箱永久钉住。
+    // 头部读不出来时 `bundledBuiltAt` 是 undefined，直接走完整比较（宁可多解析一次，也不猜时间戳）。
     const sandbox: TagDbData | undefined = await TagDb.readSandbox(ctx);
-    if (sandbox !== undefined && sandbox.meta.builtAt >= BUILTIN_BUILT_AT) {
+    const bundledBuiltAt: string | undefined = TagDb.readBundledBuiltAt(ctx);
+    if (sandbox !== undefined && bundledBuiltAt !== undefined && sandbox.meta.builtAt >= bundledBuiltAt) {
       TagDb.install(sandbox, 'updated');
       Logger.info('TagDb', `loaded updated snapshot: ${sandbox.keys.length} tags, built ${sandbox.meta.builtAt}`);
       return;
@@ -340,6 +349,44 @@ export class TagDb {
     }
     // 自称本格式却解析不了 = 构建事故：不兜底、直接抛。
     return parseTagDb(text);
+  }
+
+  /**
+   * 只读内置快照的头部，取 `#source` 的生成时间（约 80 B）。
+   *
+   * 用 fd 读前 `BUNDLED_HEAD_BYTES` 字节：格式把头部固定成两行（版本 + `#source`），
+   * 读满一份 3.1 MB 只为一行元信息不划算。取不到（设备/打包方式不支持 fd、文件缺失、
+   * 头部不合规）返回 undefined，调用方退回「读整份 + 两份比较」——不猜时间戳。
+   */
+  private static readBundledBuiltAt(ctx: common.Context): string | undefined {
+    let opened: boolean = false;
+    try {
+      const region: resourceManager.RawFileDescriptor = ctx.resourceManager.getRawFdSync(TAGDB_FILE);
+      opened = true;
+      const size: number = Math.min(BUNDLED_HEAD_BYTES, region.length);
+      if (size <= 0) {
+        return undefined;
+      }
+      const buffer: ArrayBuffer = new ArrayBuffer(size);
+      const read: number = fs.readSync(region.fd, buffer, { offset: region.offset, length: size });
+      if (read <= 0) {
+        return undefined;
+      }
+      const decoder: util.TextDecoder = util.TextDecoder.create('utf-8');
+      return peekBuiltAt(decoder.decodeToString(new Uint8Array(buffer, 0, read)));
+    } catch (e) {
+      Logger.info('TagDb', `bundled head unreadable, falling back to full compare: ${describeError(e as Object)}`);
+      return undefined;
+    } finally {
+      if (opened) {
+        try {
+          ctx.resourceManager.closeRawFdSync(TAGDB_FILE);
+        } catch (e) {
+          // 关不掉不影响已读到的内容；fd 会随进程退出释放。
+          Logger.info('TagDb', `closeRawFd failed: ${describeError(e as Object)}`);
+        }
+      }
+    }
   }
 
   /** 让出一拍事件循环（0 ms）：同步解析前先给首帧绘制机会。 */

@@ -1,6 +1,6 @@
 import { describe, it, expect } from '@ohos/hypium';
 import {
-  escapeField, unescapeField, parseTagDb, peekFormat, translateTagOf, translateNsOf, introOf, searchTags, TAGDB_FORMAT
+  escapeField, unescapeField, parseTagDb, peekFormat, peekBuiltAt, translateTagOf, translateNsOf, introOf, searchTags, TAGDB_FORMAT
 } from '../../main/ets/tagdb/TagDbFormat';
 
 // 排序键 = ns + ':' + tag，必须严格递增：
@@ -40,6 +40,17 @@ export default function tagDbFormatTest() {
       expect(db.meta.sha).assertEqual('deadbeef');
       expect(db.keys.length).assertEqual(7);
       expect(db.nsNames.get('female')).assertEqual('女性');
+    });
+    it('peekBuiltAt_reads_only_the_source_line', 0, () => {
+      // 加载器先用它判断「内置比沙箱新不新」：只要第二行，不解析整份。
+      expect(peekBuiltAt(FIXTURE)).assertEqual('2026-11-01T00:00:00Z');
+    });
+    it('peekBuiltAt_rejects_truncated_or_foreign_head', 0, () => {
+      // 只读窗口截断在第二行中间 / 版本不是本格式 / 列数不对 → undefined（调用方走完整路径）。
+      expect(peekBuiltAt('#tagdb\t1\n#source\tdeadbeef\t2026-11')).assertEqual(undefined);
+      expect(peekBuiltAt('#tagdb\t2\n#source\tdeadbeef\t2026-11-01T00:00:00Z\n')).assertEqual(undefined);
+      expect(peekBuiltAt('#tagdb\t1\n#source\tdeadbeef\n')).assertEqual(undefined);
+      expect(peekBuiltAt('')).assertEqual(undefined);
     });
     it('rejects_unsorted_tags', 0, () => {
       // 把第一条的命名空间改成 zzz：key 从 artist:… 变成 zzz:…，后面的 female:… 就比它小了。

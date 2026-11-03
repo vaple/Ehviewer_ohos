@@ -57,7 +57,7 @@ function versionCodeOf(versionName: string): number {
 }
 
 hvigor.nodesEvaluated(() => {
-  // 快照先生成：后面 ArkTS 编译要 import `tagdb/TagDbBuiltin.ets`，它跟快照同一次生成。
+  // 快照要先于打包生成（rawfile 会被打进 HAP）；源码里没有任何文件 import 它。
   ensureTagdb();
   const node: HvigorNode = getNode(__filename);
   const appContext = node.getContext(OhosPluginId.OHOS_APP_PLUGIN) as OhosAppContext;
