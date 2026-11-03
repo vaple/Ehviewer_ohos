@@ -16,7 +16,7 @@ import { DownloadSettings, downloadSettings, clampConcurrency } from '../state/D
 import { HdsListItemCard, HdsNavDestination, PrefixIcon, SuffixArrow, SuffixBadge, SuffixButton, SuffixSelect, SuffixSwitch } from '@kit.UIDesignKit';
 import { CARD_GAP, CARD_RADIUS, PAGE_PADDING, SHEET_MATERIAL } from './Materials';
 import { TITLE_BAR_H } from './NavStyle';
-import { CacheManager } from '../service/CacheManager';
+import { BundleStorage, CacheManager } from '../service/CacheManager';
 import { formatBytes } from '../common/Bytes';
 import { DiagLog, statsSummary } from '../service/DiagLog';
 import { ExportMeta, LogExport } from '../service/LogExport';
@@ -106,12 +106,17 @@ export struct SettingsPage {
   @Local uconfig: string = '';
   @Local message: string = '';
   @Local showWeb: boolean = false;
-  /** 缓存占用（字节格式化后的展示串；`—` = 尚未统计）。 */
-  @Local cacheText: string = '—';
+  /** 存储占用（格式化后的展示串；`—` = 尚未统计）。四行数字一起换，避免半新半旧。 */
+  @Local storageTotal: string = '—';
+  @Local storageApp: string = '—';
+  @Local storageData: string = '—';
+  @Local storageCache: string = '—';
+  /** 上一次统计是否失败（失败时行副标题直接说失败，不保留旧数字）。 */
+  @Local storageFailed: boolean = false;
   @Local cacheBusy: boolean = false;
   /** Cookie 导入草稿（半模态里的输入框；导出直接进剪贴板，不在页面常驻文本框）。 */
   @Local cookieDraft: string = '';
-  /** 半模态：`sheetKind` 1 = 导入 Cookie / 2 = 诊断日志（一个节点只能挂一个 `bindSheet`）。 */
+  /** 半模态：`sheetKind` 1 = 导入 Cookie / 2 = 诊断日志 / 3 = 存储详情（一个节点只能挂一个 `bindSheet`）。 */
   @Local sheetOpen: boolean = false;
   @Local sheetKind: number = 0;
   /** 诊断日志副标题（打开半模态前先算好：`bindSheet` 打开后改状态不会重绘）。 */
@@ -331,6 +336,13 @@ export struct SettingsPage {
     this.sheetOpen = true;
   }
 
+  /** 打开「存储」半模态：数字必须**在打开前**算好（builder 只构建一次，见 `ui/AGENTS.md #20`）。 */
+  private async openStorageSheet(): Promise<void> {
+    await this.refreshStorage();
+    this.sheetKind = 3;
+    this.sheetOpen = true;
+  }
+
   /** 重算诊断日志占用 + 最近崩溃时间。 */
   private refreshDiag(): void {
     this.diagText = statsSummary(DiagLog.stats(), Date.now());
@@ -381,15 +393,46 @@ export struct SettingsPage {
     }
   }
 
-  /** 刷新缓存占用（与系统「设置-存储」同口径：`BundleStats.cacheSize`）。 */
-  private async refreshCache(): Promise<void> {
+  /**
+   * 刷新存储占用（与系统「设置-存储-应用」同口径：`BundleStats`）。
+   * 总计 = 应用 + 数据；缓存是数据的子集，**不重复相加**（官方 FAQ `faqs-local-file-manager-73`）。
+   */
+  private async refreshStorage(): Promise<void> {
     try {
-      const bytes: number = await CacheManager.cacheSize();
-      this.cacheText = formatBytes(bytes);
+      const stats: BundleStorage = await CacheManager.stats();
+      this.storageTotal = formatBytes(stats.totalSize);
+      this.storageApp = formatBytes(stats.appSize);
+      this.storageData = formatBytes(stats.dataSize);
+      this.storageCache = formatBytes(stats.cacheSize);
+      this.storageFailed = false;
     } catch (e) {
-      Logger.error('Settings', `cache stats failed: ${e}`);
-      this.cacheText = '统计失败';
+      Logger.error('Settings', `storage stats failed: ${e}`);
+      // 四行一起回 `—`：不能让半模态拿旧数字冒充新结果。
+      this.storageTotal = '—';
+      this.storageApp = '—';
+      this.storageData = '—';
+      this.storageCache = '—';
+      this.storageFailed = true;
     }
+  }
+
+  /** 行副标题：统计失败就说失败，不留上一份数字。 */
+  private storageSubtitle(): string {
+    if (this.storageFailed) {
+      return '统计失败';
+    }
+    return `总计 ${this.storageTotal} · 缓存 ${this.storageCache}`;
+  }
+
+  /** 半模态标题（一个 `bindSheet` 承载三种内容）。 */
+  private sheetTitle(): string {
+    if (this.sheetKind === 1) {
+      return '导入 Cookie';
+    }
+    if (this.sheetKind === 2) {
+      return '诊断日志';
+    }
+    return '存储';
   }
 
   /** 清缓存：确认 → 清模块级 + 应用级 cacheDir → 重新统计。 */
@@ -414,7 +457,9 @@ export struct SettingsPage {
     this.cacheBusy = true;
     try {
       await CacheManager.clear(this.context());
-      await this.refreshCache();
+      await this.refreshStorage();
+      // 半模态内容只在打开时构建一次（#20）：不关掉就还是旧数字，看起来像没生效。
+      this.sheetOpen = false;
       promptAction.showToast({ message: '缓存已清理' });
     } catch (e) {
       Logger.error('Settings', `clear cache failed: ${e}`);
@@ -507,17 +552,21 @@ export struct SettingsPage {
     });
   }
 
-  /** 官方入口：系统「设置-应用信息」页（存储/权限都在里面，由系统统一管理）。 */
-  private openSystemAppInfo(): void {
+  /**
+   * 打开系统「存储」页（设置应用注册的 uri 白名单之一，真机实测可用）。
+   * 本应用的存储详情页（总计/应用/数据/缓存 + 清空缓存）**没有对外 uri**：`application_info_entry`
+   * 只到应用信息页、`storage_settings` 也只到按应用分组的列表，参数（bundleName 等）选不中具体应用。
+   * 所以这里只能把用户送到列表，再由用户点本应用；应用内的「存储」半模态才是主入口。
+   */
+  private openSystemStorage(): void {
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     const want: Want = {
       bundleName: 'com.huawei.hmos.settings',
       abilityName: 'com.huawei.hmos.settings.MainAbility',
-      uri: 'application_info_entry',
-      parameters: { pushParams: ctx.applicationInfo.name }
+      uri: 'storage_settings'
     };
     ctx.startAbility(want).catch((e: object) => {
-      Logger.error('Settings', `open app info failed: ${e}`);
+      Logger.error('Settings', `open system storage failed: ${e}`);
       promptAction.showToast({ message: '打不开系统设置' });
     });
   }
@@ -629,7 +678,7 @@ export struct SettingsPage {
           .fontSize(12)
           .fontColor($r('app.color.text_secondary'))
           .width('100%')
-      } else {
+      } else if (this.sheetKind === 2) {
         Text('日志只保存在本机，包含站点地址、画廊号、错误信息；不含账号密码和 Cookie。')
           .fontSize(12)
           .fontColor($r('app.color.text_secondary'))
@@ -646,10 +695,51 @@ export struct SettingsPage {
           .backgroundColor($r('app.color.chip_danger_bg'))
           .fontColor($r('app.color.danger'))
           .onClick(() => { this.confirmClearLogs(); })
+      } else {
+        // 存储明细：数字在打开半模态之前由 `openStorageSheet` 算好（builder 只构建一次）。
+        this.storageRow('总计', this.storageTotal)
+        Divider().color($r('app.color.divider'))
+        this.storageRow('应用', this.storageApp)
+        Divider().color($r('app.color.divider'))
+        this.storageRow('数据', this.storageData)
+        Divider().color($r('app.color.divider'))
+        this.storageRow('缓存', this.storageCache)
+        Text('总计 = 应用 + 数据；缓存包含在数据里，不重复计入。')
+          .fontSize(12)
+          .fontColor($r('app.color.text_secondary'))
+          .width('100%')
+        Button(this.cacheBusy ? '正在清理…' : '清理缓存')
+          .width('100%')
+          .enabled(!this.cacheBusy)
+          .onClick(() => { this.confirmClearCache(); })
+        Button('在系统设置中查看')
+          .width('100%')
+          .backgroundColor(Color.Transparent)
+          .fontColor($r('app.color.brand'))
+          .onClick(() => {
+            this.sheetOpen = false;
+            this.openSystemStorage();
+          })
       }
     }
     .width('100%')
     .padding(16)
+  }
+
+  /** 存储明细的一行（label 左、数值右）。 */
+  @Builder
+  storageRow(label: string, value: string) {
+    Row() {
+      Text(label)
+        .fontSize(15)
+        .fontColor($r('app.color.text_secondary'))
+      Blank()
+      Text(value)
+        .fontSize(15)
+        .fontColor($r('app.color.text_primary'))
+    }
+    .width('100%')
+    .height(28)
   }
 
   build() {
@@ -849,24 +939,16 @@ export struct SettingsPage {
               .margin({ bottom: CARD_GAP })
 
             SubHeaderV2({ title: new SubHeaderV2Title({ primaryTitle: '存储' }) })
-            // 缓存统计/清理：官方 `storageStatistics` + 清 `cacheDir`（模块级 + 应用级）。
+            // 占用明细与清理都收进一个半模态：系统的应用存储详情页没有对外 uri（见 `openSystemStorage`）。
             HdsListItemCard({
               textItem: {
-                primaryText: { text: '缓存占用' },
-                secondaryText: { text: this.cacheText }
+                primaryText: { text: '存储占用' },
+                secondaryText: { text: this.storageSubtitle() }
               },
               suffixItem: new SuffixArrow(),
-              onClick: () => { this.openSystemAppInfo(); }
+              onClick: () => { this.openStorageSheet(); }
             })
-            HdsListItemCard({
-              textItem: {
-                primaryText: { text: '清理缓存' },
-                secondaryText: { text: '图片与预览缓存；收藏、历史与设置不受影响' }
-              },
-              suffixItem: new SuffixArrow(),
-              onClick: () => { this.confirmClearCache(); }
-            })
-            Text('缓存统计与系统「设置-存储」同口径；点「缓存占用」可打开系统应用信息页。')
+            Text('总计 = 应用 + 数据；缓存包含在数据里。清理缓存只影响图片与预览，收藏、历史与设置不受影响。')
               .fontSize(12)
               .fontColor($r('app.color.text_secondary'))
               .width('100%')
@@ -988,7 +1070,9 @@ export struct SettingsPage {
     .bindToScrollable([this.scroller])
     .onBackPressed(() => this.handleBack())
     .bindSheet($$this.sheetOpen, this.sheetContent(), {
-      title: { title: this.sheetKind === 1 ? '导入 Cookie' : '诊断日志' },
+      title: { title: this.sheetTitle() },
+      // 存储明细只有四行 + 两个按钮：按内容高度贴合；另外两张沿用默认两档（内容更高，能拉大）。
+      detents: this.sheetKind === 3 ? [SheetSize.FIT_CONTENT] : [SheetSize.MEDIUM, SheetSize.LARGE],
       systemMaterial: SHEET_MATERIAL,
       onDisappear: () => {
         this.sheetOpen = false;
@@ -996,7 +1080,7 @@ export struct SettingsPage {
     })
     .onAppear(() => {
       this.refreshLoginState();
-      this.refreshCache();
+      this.refreshStorage();
       this.refreshDiag();
     })
     .onReady((ctx: NavDestinationContext) => {
