@@ -1,4 +1,3 @@
-import { uiMaterial } from '@kit.ArkUI';
 import { hdsMaterial, SystemMaterialParams } from '@kit.UIDesignKit';
 import { Logger } from '../common/Logger';
 
@@ -8,10 +7,10 @@ import { Logger } from '../common/Logger';
  * 约定：
  * - 材质默认值只由 `module.json5` 的 `ohos.arkui.UIMaterial.state=enable` 决定
  *   （Chip / Select / SegmentButton / Toast / 半模态等默认吃系统材质），新增页面不要重复写组件级材质；
- * - HDS 组件走 `hdsMaterial.SystemMaterialParams`（`systemMaterialEffect`），其它组件走
- *   `uiMaterial.ImmersiveMaterial`（`.systemMaterial()`）——两套参数不能互传；
- * - 全局开关覆盖不到的自定义容器（评论输入胶囊等）才用组件级材质，且必须放在
- *   `backgroundColor` / `border` / `shadow` 之后：不透明底色或 `backgroundBlurStyle` 会把材质层遮住；
+ * - HDS 组件走 `hdsMaterial.SystemMaterialParams`（`systemMaterialEffect`）；**普通组件**的
+ *   `uiMaterial.ImmersiveMaterial`（`.systemMaterial()`）只在 NavDestination 标题栏和 End 位横向 Tabs
+ *   底栏生效，内容区自定义容器（评论输入条/提示气泡）设了不渲染——那块只能用 `backgroundBlurStyle`；
+ * - 任何材质都不要叠 `backgroundBlurStyle`：模糊层在材质之上，会把材质整块盖掉；
  * - HDS 没有对应组件的面（吸顶条等）用官方 `backgroundBlurStyle`，不自绘。
  */
 
@@ -43,46 +42,14 @@ Logger.info('Materials', `hds material level=${HDS_MATERIAL.materialLevel} (IMME
 // 材质面只挂官方模糊，不叠 `sys.color.comp_background_*` 之类的底色令牌：
 // 那些令牌不透明，叠上去会把模糊整块盖成实心。
 
-/** Sheet / 浮层材质由 `module.json5` 的全局开关（`ohos.arkui.UIMaterial.state=enable`）提供。 */
-
 /**
- * 评论输入胶囊：浮在评论列表上，全局开关不覆盖自定义容器，只能组件级设置。
- * 厚度取 THICK（与原来 `COMPONENT_ULTRA_THICK` 的观感接近），带触感光效但不做形变——
- * 输入框在打字时会持续被按住，弹性形变属于噪声。
+ * Sheet / 浮层材质由 `module.json5` 的全局开关（`ohos.arkui.UIMaterial.state=enable`）提供。
+ *
+ * **普通组件（Row/Column 等）的 `systemMaterial` 只在 `Navigation/NavDestination` 标题栏和
+ * `barPosition=BarPosition.End` 的横向 Tabs 底栏生效**（官方《开启沉浸光感》明确列出），
+ * 内容区里的自定义容器（评论输入条、提示气泡）设了也**不会渲染**——真机上表现为完全透明。
+ * 内容区需要毛玻璃时只能用官方 `backgroundBlurStyle`；不要给这些容器写 `ImmersiveMaterial`。
  */
-export const COMMENT_BAR_MATERIAL: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
-  style: uiMaterial.ImmersiveStyle.THICK,
-  lightEffect: {}
-});
-
-/** 评论页错误/提示气泡（浮在评论上，同样是自定义容器）。 */
-export const COMMENT_BUBBLE_MATERIAL: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
-  style: uiMaterial.ImmersiveStyle.REGULAR
-});
-
-/** 当前设备是否支持沉浸材质（必须在 windowStage 创建之后调用；`onCreate` 里会得到 false）。 */
-export function immersiveMaterialSupported(): boolean {
-  return uiMaterial.isImmersiveMaterialSupported();
-}
-
-/** 自定义浮层的背板：材质或官方模糊，二选一。 */
-export interface CommentBackdrop {
-  material: uiMaterial.Material | undefined;
-  blur: BlurStyle;
-}
-
-/**
- * 评论胶囊 / 提示气泡的背板。
- * - 支持沉浸材质：只挂材质，blur 关掉（同开时 blur 会盖住材质）；
- * - 不支持：退回原来的官方模糊——否则删掉 blur 后容器完全透明，评论正文从下面滑过会叠字。
- */
-export function commentBackdrop(immersiveSupported: boolean, material: uiMaterial.Material,
-  fallbackBlur: BlurStyle): CommentBackdrop {
-  if (immersiveSupported) {
-    return { material, blur: BlurStyle.NONE };
-  }
-  return { material: undefined, blur: fallbackBlur };
-}
 
 /** 页面横向留白（vp）。与 HDS `HdsListItemCard` 自带的 16vp 侧缩进对齐（同页不允许两套栅格）。 */
 export const PAGE_PADDING: number = 16;

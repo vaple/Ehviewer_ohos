@@ -1,5 +1,5 @@
 import { common } from '@kit.AbilityKit';
-import { AppStorageV2, PersistenceV2, uiMaterial } from '@kit.ArkUI';
+import { AppStorageV2, PersistenceV2 } from '@kit.ArkUI';
 import { HdsNavDestination } from '@kit.UIDesignKit';
 import { EhSite } from '../network/EhUrl';
 import { CookieStore } from '../network/CookieStore';
@@ -13,12 +13,9 @@ import { Logger } from '../common/Logger';
 import { GalleryDetailParser } from '../parser/GalleryDetailParser';
 import { AppSettings } from '../state/AppSettings';
 import { WindowState } from '../state/WindowState';
-import { CARD_GAP, CARD_RADIUS, COMMENT_BAR_H, COMMENT_BAR_MARGIN, COMMENT_BAR_MATERIAL, COMMENT_BUBBLE_MATERIAL, PAGE_PADDING, TOUCH_MIN, CommentBackdrop, commentBackdrop, commentScoreColor, immersiveMaterialSupported } from './Materials';
+import { CARD_GAP, CARD_RADIUS, COMMENT_BAR_H, COMMENT_BAR_MARGIN, PAGE_PADDING, TOUCH_MIN, commentScoreColor } from './Materials';
 import { commentDateText, commentScoreText } from '../common/CommentText';
 import { navTitleBarStyle, TITLE_BAR_H } from './NavStyle';
-
-/** 材质回退日志只打一次（进程级），避免每次 build 刷屏。 */
-let materialFallbackLogged: boolean = false;
 
 /**
  * 独立评论页（源 `GalleryCommentsScene` 同形）：全量评论 + 输入框 + 发送。
@@ -47,26 +44,6 @@ export struct CommentsPage {
 
   private context(): common.Context {
     return this.getUIContext().getHostContext() as common.Context;
-  }
-
-  /** 输入胶囊背板：支持沉浸材质走材质，否则退回模糊（见 `commentBackdrop`）。 */
-  private barBackdrop(): CommentBackdrop {
-    return this.backdrop(COMMENT_BAR_MATERIAL, BlurStyle.COMPONENT_ULTRA_THICK);
-  }
-
-  /** 提示气泡背板。 */
-  private bubbleBackdrop(): CommentBackdrop {
-    return this.backdrop(COMMENT_BUBBLE_MATERIAL, BlurStyle.COMPONENT_REGULAR);
-  }
-
-  /** 材质不可用时退回模糊；只记一次日志，别每次 build 都写。 */
-  private backdrop(material: uiMaterial.Material, fallbackBlur: BlurStyle): CommentBackdrop {
-    const backdrop: CommentBackdrop = commentBackdrop(immersiveMaterialSupported(), material, fallbackBlur);
-    if (backdrop.material === undefined && !materialFallbackLogged) {
-      materialFallbackLogged = true;
-      Logger.warn('Comments', 'ImmersiveMaterial unavailable; input bar falls back to blur');
-    }
-    return backdrop;
   }
 
   private async load(): Promise<void> {
@@ -189,8 +166,7 @@ export struct CommentsPage {
               .fontColor($r('app.color.text_secondary'))
               .padding({ left: 12, right: 12, top: 6, bottom: 6 })
               .borderRadius(16)
-              .backgroundBlurStyle(this.bubbleBackdrop().blur)
-              .systemMaterial(this.bubbleBackdrop().material)
+              .backgroundBlurStyle(BlurStyle.COMPONENT_REGULAR)
           }
           Row({ space: 6 }) {
             TextInput({ placeholder: '写下你的评论', text: this.draft })
@@ -226,9 +202,8 @@ export struct CommentsPage {
           .height(COMMENT_BAR_H)
           .padding({ left: 16, right: 4 })
           .borderRadius(COMMENT_BAR_H / 2)
-          // 只挂官方材质、不铺不透明底色；`backgroundBlurStyle` 只在设备不支持沉浸材质时兜底。
-          .backgroundBlurStyle(this.barBackdrop().blur)
-          .systemMaterial(this.barBackdrop().material)
+          // 内容区不能用 `systemMaterial`（只在标题栏/底栏生效，见 `Materials.ets`），只能官方模糊。
+          .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
         }
         .width('100%')
         .padding({
