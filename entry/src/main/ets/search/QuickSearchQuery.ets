@@ -17,15 +17,33 @@ export function hasSavedKeyword(items: QuickSearch[], keyword: string): boolean 
 }
 
 /**
+ * 快搜记录的 `keyword` → `f_search` 条件主体。
+ *
+ * `mode` 是老记录唯一能说明「这条查询当年是什么模式」的线索：1 = 上传者，恢复时**必须**
+ * 补 `uploader:"…"` qualifier——裸名字会被当普通关键词，搜出一堆无关画廊。
+ * 2 = 标签，归一到精确语法（修复前存的裸 `parody:blue archive` 再运行也仍是精确标签搜索）。
+ * 0 原样返回：keyword 就是完整的查询串（含用户手写的 qualifier）。
+ */
+function restoredQuery(keyword: string, mode: number): string {
+  if (mode === 1) {
+    return `uploader:"${keyword.trim()}"`;
+  }
+  if (mode === 2) {
+    return exactTagQuery(keyword);
+  }
+  return keyword;
+}
+
+/**
  * 快搜记录 → 搜索路由参数（含落库四条件；老记录 `category/advanceSearch` 为 0 即默认态）。
- * tag 态把 keyword 归一到 `namespace:"tag$"`：修复前存的裸 `parody:blue archive` 再运行也是精确标签搜索。
+ * `kind` 仍按 `mode` 还原：保存侧用它在列表里区分来源；URL 只由 `queryText` 决定，不再有特殊拼接。
  * 纯函数，行为即断言。
  */
 export function quickSearchToParam(item: QuickSearch): SearchParam {
   const decoded = decodeAdvance(item.advanceSearch);
   const kind = searchKindOf(item.mode);
   return {
-    query: kind === 'tag' ? exactTagQuery(item.keyword) : item.keyword,
+    query: restoredQuery(item.keyword, item.mode),
     title: item.name,
     kind: kind,
     selectedBits: selectedFromExcluded(item.category, ALL_CATS),

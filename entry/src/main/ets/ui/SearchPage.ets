@@ -14,8 +14,9 @@ import { AppSettings } from '../state/AppSettings';
 import { WindowState } from '../state/WindowState';
 import { HdsNavDestination, HideMode } from '@kit.UIDesignKit';
 import { GalleryRow, GalleryRowItem, loadMissingThumbs, pushGalleryDetail } from './GalleryRow';
-import { fCatsMask, excludedFromSelected, encodeAdvance, ALL_CATS, languageQueryOf, SEARCH_LANGUAGES, exclusionQueryOf, SearchFilters, exactTagQuery } from '../search/SearchQuery';
-import { replaceRange, shouldSuggest, trailingToken, TagToken } from '../search/TagInput';
+import { fCatsMask, excludedFromSelected, encodeAdvance, ALL_CATS, languageQueryOf, SEARCH_LANGUAGES, exclusionQueryOf, SearchFilters } from '../search/SearchQuery';
+import { shouldSuggest, trailingToken, TagToken } from '../search/TagInput';
+import { appendDraft, joinQueryText, splitQueryTokens, suggestionChip } from '../search/QuerySegments';
 import { TagCandidate } from '../tagdb/TagCandidate';
 import { TagDb } from '../tagdb/TagDb';
 import { TagSuggestionPanel } from './TagSuggestionPanel';
@@ -62,6 +63,8 @@ function langSelectOptions(): SelectOption[] {
 
 /** 标题栏底部功能区：单行搜索行高度（vp）。 */
 const SEARCH_ROW_H: number = 52;
+/** 搜索输入框的组件 id（`＋` 之后要把焦点还给它）。 */
+const SEARCH_FIELD_ID: string = 'search-draft';
 /** 收起态筛选摘要行高度（vp）。 */
 const SUMMARY_ROW_H: number = 40;
 
@@ -104,8 +107,11 @@ function scopeShort(key: string): string {
 }
 
 /**
- * 搜索页（关键词 / 上传者 / 标签三态经 `SearchParam.kind` 进入；结果页与首页同构，复用 `GalleryListParser`）。
- * 状态与首页隔离：独立 `page`/`items`。
+ * 搜索页（关键词 / 标签两态经 `SearchParam.kind` 进入；上传者已折叠成 `uploader:"…"` 普通条件）。
+ * 结果页与首页同构，复用 `GalleryListParser`。状态与首页隔离：独立 `page`/`items`。
+ *
+ * 查询模型：输入框只放**草稿**，回车 / ＋ / 点候选才把草稿变成一条 chip（`segments`）；
+ * 发出去的 `f_search` 由 `queryText`（条件 + 草稿）拼成，不再把整串塞回输入框。
  */
 @ComponentV2
 export struct SearchPage {
@@ -123,7 +129,18 @@ export struct SearchPage {
   @Local activeRules: Filter[] = [];
   /** 本次搜索忽略的排除项（`mode:text` 键；`applyParam` 重置）。 */
   @Local ignoredExclusions: string[] = [];
-  @Local query: string = '';
+  /**
+   * 已确认的查询条件（按加入顺序拼进 `f_search`）。chip 行的唯一真源。
+   * 只整体替换、不原地改：`@Local` 的数组刷新靠引用变化。
+   */
+  @Local segments: string[] = [];
+  /**
+   * 输入框里的草稿：只放「还在输入」的部分。
+   * 空格就是空格（英文 tag 自带空格），回车 / 点「＋」/ 点候选才转成 chip。
+   */
+  @Local draft: string = '';
+  /** chip 行实测高度（vp；无 chip 时不渲染 → 0）。喂给 `headerHeight`，让内容避让自动跟随。 */
+  @Local chipsHeight: number = 0;
   @Local kind: SearchKind = 'keyword';
   @Local pageTitle: string = '搜索';
   @Local items: GalleryRowItem[] = [];
@@ -174,7 +191,7 @@ export struct SearchPage {
   private searchController: SearchController = new SearchController();
   /** 中文联想候选（`TagDb.search`；空 = 无候选，面板不渲染，避免空卡片）。 */
   @Local suggestions: TagCandidate[] = [];
-  /** 产生这批候选时用的片段：选中时按它替换，不能按「点击当下」重算（期间输入可能已变）。 */
+  /** 产生这批候选时用的片段：入列前用它核对草稿是否还是同一串（期间用户可能已改输入）。 */
   @Local suggestToken: TagToken | undefined = undefined;
   /** 联想面板是否展开（`if` 的条件必须是可观察状态，见 `ui/AGENTS.md` #19）。 */
   @Local suggestionsOpen: boolean = false;
@@ -193,9 +210,19 @@ export struct SearchPage {
     return this.getUIContext().getHostContext() as common.Context;
   }
 
-  /** 标题栏底部功能区高度：单行搜索恒在，收起态多一行摘要。 */
+  /** 标题栏底部功能区高度：单行搜索 + chip 行（实测）+ 收起态摘要行。 */
   @Computed get headerHeight(): number {
+    // chips 画在页面内容区（见 `chipsRow`），不再进标题栏高度：
+    // 标题栏的 bottomBuilder 里，超出首屏高度的子节点拿不到点击（实测 chip 点不动）。
     return SEARCH_ROW_H + (this.filtersExpanded ? 0 : SUMMARY_ROW_H);
+  }
+
+  /**
+   * 发给站点的 `f_search` 主体 = 已确认条件 + 非空草稿。
+   * 上传者（`uploader:"…"`）与标签（`ns:"tag$"`）都只是普通条件，这里不再按模式改写。
+   */
+  @Computed get queryText(): string {
+    return joinQueryText(this.segments, this.draft);
   }
 
   /** 内容区顶部避让（状态栏 + 标题栏主标题 + 底部功能区；不再用吸顶 header，内容不钻到栏下）。 */
@@ -275,20 +302,14 @@ export struct SearchPage {
   }
 
   /**
-   * 防抖到点：只在「最后一个片段含中日文」时给候选。
+   * 防抖到点：只在「草稿最后一个片段含中日文」时给候选。
+   * 只看草稿（不再解析整段查询）：已确认条件早已是 `ns:"tag$"` 正规语法，再拿去联想只会匹到自己。
    * 回调里不碰 `getUIContext()`（`ui/AGENTS.md` #26：脱离 UI 上下文会抛错）。
    */
   private runSuggest(value: string): void {
     this.suggestTimer = -1;
-    // 只有上传者搜索要屏蔽：它的 query 会被 `buildUrl` 包成 `uploader:"…"`，候选插入的 `ns:"tag$"`
-    // 会被再包一层引号 → 必然 0 结果。
-    // `tag` 模式（从详情页点标签进来）与 `keyword` 一样是**原样**拼进 `f_search`，所以联想必须照常可用。
-    if (this.kind === 'uploader') {
-      this.closeSuggestions();
-      return;
-    }
     // 等待期间用户又改了输入：这次结果已经过期，丢弃（否则会把上一个词的候选闪回面板）。
-    if (value !== this.query) {
+    if (value !== this.draft) {
       return;
     }
     const token: TagToken | undefined = trailingToken(value);
@@ -315,10 +336,10 @@ export struct SearchPage {
   }
 
   /**
-   * 选中候选：只替换**产生这批候选时**那个片段（`ns:"tag$"` 精确语法），其余条件原样保留。
-   * 不能按点击当下重算片段：面板从出结果到点击之间用户可能又改了输入，
-   * 重算出的区间会指向另一个词（甚至把 chip 切换加上的 `-` 吞掉）。
-   * 不自动搜索——用户常常还要接着拼第二个标签；焦点留在框里、光标移到末尾，连续输入不中断。
+   * 选中候选：把 `ns:"tag$"` 精确语法作为一条 chip 入列，并保留草稿前导的 `-`/`~`。
+   * 草稿里只有「正在输入」的一段，所以不需要再算替换区间——但要先核对草稿还是产生候选时那串：
+   * 候选与 `onChange` 之间隔着 150 ms 防抖，用户可能已经改过输入（此时按旧候选入列就是错的）。
+   * 不自动搜索——用户常常还要接着拼第二个标签；草稿清空、光标回到开头，连续输入不中断。
    */
   private pickSuggestion(ns: string, tag: string): void {
     const token: TagToken | undefined = this.suggestToken;
@@ -326,15 +347,35 @@ export struct SearchPage {
       this.closeSuggestions();
       return;
     }
-    // 候选与 `onChange` 之间隔着 150 ms 防抖：用户在这段时间里可能已改了文本，
-    // 旧区间指向的是别的词，照写会覆盖错误的字符。
-    if (this.query.substring(token.start, token.end) !== token.word) {
+    if (this.draft.substring(token.start, token.end) !== token.word) {
       this.closeSuggestions();
       return;
     }
-    this.query = replaceRange(this.query, token.start, token.end, exactTagQuery(`${ns}:${tag}`));
-    this.searchController.caretPosition(this.query.length);
+    const chip: string = suggestionChip(this.draft, ns, tag);
+    // 草稿里排在当前片段前面的内容也要留住：用户可能一口气敲了「foo 巨乳」再点候选，
+    // 直接清空草稿会把 `foo` 悄悄丢了。纯前缀（`-`/`~`）不算内容，它已经并进 chip。
+    const head: string = this.draft.substring(0, token.start).trim();
+    const kept: string[] = head.length === 0 || head === '-' || head === '~' ? [] : splitQueryTokens(head);
+    kept.push(chip);
     this.closeSuggestions();
+    this.segments = this.segments.concat(kept);
+    this.draft = '';
+    this.searchController.caretPosition(0);
+  }
+
+  /**
+   * 草稿 → chip（回车 / 「＋」共用）。原样入列，只 trim 首尾：
+   * 用户可能正在手写 `uploader:"名字"` 这类条件，替它规范化反而会改坏。
+   */
+  private commitDraft(): void {
+    const next: string[] = appendDraft(this.segments, this.draft);
+    if (next === this.segments) {
+      return;
+    }
+    this.closeSuggestions();
+    this.segments = next;
+    this.draft = '';
+    this.searchController.caretPosition(0);
   }
 
   /** 摘要 chip → 重新展开高级选项并回顶（与折叠互为反向动画）。 */
@@ -358,9 +399,9 @@ export struct SearchPage {
     });
   }
 
-  /** 存为快速搜索（仅 keyword 态；名取当前查询）。 */
+  /** 存为快速搜索；名取当前查询（`f_search` 主体，URL 也只用它，不再按模式改写）。 */
   private async saveQuick(): Promise<void> {
-    const keyword: string = this.query.trim();
+    const keyword: string = this.queryText;
     if (keyword.length === 0) {
       promptAction.showToast({ message: '先输入关键词或条件' });
       return;
@@ -391,9 +432,16 @@ export struct SearchPage {
 
   /** 路由参数（含快搜运行带条件）→ 本页状态；缺字段回退默认。 */
   private applyParam(param: SearchParam): void {
-    // 换了一套查询条件：旧候选与它的片段区间不再对应新 query，必须一起收起。
+    // 换了一套查询条件：旧候选与它的片段区间不再对应新草稿，必须一起收起。
     this.closeSuggestions();
-    this.query = param.query;
+    // 入口给的是完整查询串（标签/上传者都已是 `ns:"tag$"` / `uploader:"…"` 正规语法）：
+    // 按引号安全切词回填成 chips，输入框留空——用户接下来敲的是**追加**条件。
+    this.segments = splitQueryTokens(param.query);
+    this.draft = '';
+    if (this.segments.length === 0) {
+      // 这块不再渲染，`onAreaChange` 不会再来 → 高度必须手动归零，否则内容顶部会多留一段空白。
+      this.chipsHeight = 0;
+    }
     this.kind = param.kind;
     this.pageTitle = param.title.length > 0 ? param.title : '搜索';
     // 单次排除是临时筛选（快搜记录不存）；语言 chip 现在随快搜落库，缺省清空。
@@ -427,72 +475,40 @@ export struct SearchPage {
     return isNaN(n) || n <= 0 ? -1 : n;
   }
 
-  /** 把查询拆成 chip：空格分隔，引号内的空格不拆（`-other:"ai generated"` 算一个）。 */
-  private static splitTokens(text: string): string[] {
-    const out: string[] = [];
-    const src: string = text.trim();
-    let cur: string = '';
-    let inQuote: boolean = false;
-    for (let i = 0; i < src.length; i++) {
-      const ch: string = src.charAt(i);
-      if (ch === '"') {
-        inQuote = !inQuote;
-        cur += ch;
-        continue;
-      }
-      if (ch === ' ' && !inQuote) {
-        if (cur.length > 0) {
-          out.push(cur);
-          cur = '';
-        }
-        continue;
-      }
-      cur += ch;
-    }
-    if (cur.length > 0) {
-      out.push(cur);
-    }
-    return out;
-  }
-
-  @Computed get queryChips(): string[] {
-    return SearchPage.splitTokens(this.query);
-  }
-
-  /** 点 chip：包含 ↔ 排除（只改 query，立即重搜）。 */
+  /** 点 chip：包含 ↔ 排除（改 `segments` 后立即重搜）。 */
   private toggleChip(index: number): void {
-    const tokens: string[] = this.queryChips;
-    if (index < 0 || index >= tokens.length) {
+    if (index < 0 || index >= this.segments.length) {
       return;
     }
-    const token: string = tokens[index];
-    tokens[index] = token.startsWith('-') ? token.substring(1) : `-${token}`;
-    // chip 直接改 query：联想候选与它的片段区间立刻作废（否则选中会按旧区间替换，把 `-` 吞掉）。
+    const next: string[] = this.segments.slice();
+    const token: string = next[index];
+    next[index] = token.startsWith('-') ? token.substring(1) : `-${token}`;
+    // 条件变了：候选是按旧草稿算的，留着会按过期区间入列。
     this.closeSuggestions();
-    this.query = tokens.join(' ');
+    this.segments = next;
     this.load(true);
   }
 
   private removeChip(index: number): void {
-    const tokens: string[] = this.queryChips;
-    if (index < 0 || index >= tokens.length) {
+    if (index < 0 || index >= this.segments.length) {
       return;
     }
-    tokens.splice(index, 1);
+    const next: string[] = this.segments.slice();
+    next.splice(index, 1);
     this.closeSuggestions();
-    this.query = tokens.join(' ');
+    if (next.length === 0) {
+      // 最后一条 chip 删掉后 chip 行不再渲染：`onAreaChange` 不会再来，高度必须在这里归零。
+      this.chipsHeight = 0;
+    }
+    this.segments = next;
     this.load(true);
   }
 
-  private buildUrl(site: EhSite): string {    // 三态统一走 `f_search`（EHWiki：`uploader:`/`title:`/`tag:` 均为合法 qualifier）。
-    // 上传者恒加引号精确匹配；tag 态查询串已由入口写成正规语法 `namespace:"tag$"`（见 `exactTagQuery`），
-    // 这里**原样发**——再包一层会得到 `parody:""blue archive$"` 这种坏串。
-    let keyword: string;
-    if (this.kind === 'uploader') {
-      keyword = `uploader:"${this.query.trim()}"`;
-    } else {
-      keyword = this.query.trim();
-    }
+  private buildUrl(site: EhSite): string {
+    // 三种入口（关键词 / 上传者 / 标签）现在都只是普通条件：上传者写 `uploader:"…"`、
+    // 标签写 `ns:"tag$"`，由入列时的文字决定，这里不再按模式改写（再包一层会得到
+    // `parody:""blue archive$"` 这种坏串）。
+    let keyword: string = this.queryText;
     const all: number[] = ALL_CATS.slice();
     const bits: number[] = excludedFromSelected(this.selectedBits, all);
     const langFrag: string = languageQueryOf(this.selectedLang);
@@ -520,7 +536,9 @@ export struct SearchPage {
 
   /** 排除规则重读（每次搜索自动拼 `-…` 查询条件；不再本地过滤列表）。 */
   private async reloadRules(): Promise<void> {
-    if (this.kind !== 'keyword') {
+    // 从详情页点进来的单标签查询不套屏蔽规则（那是"看这个标签"的精确入口）；
+    // 上传者已折叠成普通关键词查询，不再单列分支。
+    if (this.kind === 'tag') {
       this.activeRules = [];
       return;
     }
@@ -542,7 +560,7 @@ export struct SearchPage {
       await this.reloadRules();
     }
     const exclFrag: string = exclusionQueryOf(this.activeRules, this.ignoredExclusions);
-    if (this.kind === 'keyword' && this.query.trim().length === 0 &&
+    if (this.kind === 'keyword' && this.queryText.length === 0 &&
       this.selectedLang.length === 0 && exclFrag.length === 0) {
       this.message = '';
       this.isRefreshing = false;
@@ -593,7 +611,7 @@ export struct SearchPage {
     })
   }
 
-  /** 标题栏底部功能区：`clock | Search | bookmark` 单行；收起态追加筛选摘要行。 */
+  /** 标题栏底部功能区：`clock | Search | ＋ | bookmark` 单行 + 已确认条件 chips；收起态追加筛选摘要行。 */
   @Builder
   headerArea() {
     Column() {
@@ -607,18 +625,37 @@ export struct SearchPage {
           .onClick(() => {
             this.showQuickSearch = true;
           })
-        Search({ value: this.query, placeholder: '关键词 / 标签 / 上传者', controller: this.searchController })
+        Search({ value: this.draft, placeholder: '输入关键词或标签', controller: this.searchController })
+          .id(SEARCH_FIELD_ID)
           .layoutWeight(1)
           .searchButton('搜索')
           .onChange((value: string) => {
-            this.query = value;
-            // 标签联想：中英文走同一条路；太短的片段（拉丁 <2 字符）在 `runSuggest` 里被挡掉。
+            // 输入框只承载草稿：空格就是空格（英文 tag 自带空格），不做「空格成词」。
+            this.draft = value;
+            // 标签联想：只看草稿，中英文走同一条路；太短的片段（拉丁 <2 字符）在 `runSuggest` 里被挡掉。
             this.scheduleSuggest(value);
           })
           .onSubmit((value: string) => {
-            this.query = value;
-            this.closeSuggestions();
+            // 回车 = 先把草稿变成 chip，再搜（搜的是同一串条件，只是输入框腾空好接着拼）。
+            this.draft = value;
+            this.commitDraft();
             this.submitSearch();
+          })
+        // 「＋」：草稿成词（与回车等价，但留着键盘）。草稿为空时是空操作。
+        SymbolGlyph($r('sys.symbol.plus'))
+          .fontSize(18)
+          .fontColor([$r('app.color.text_secondary')])
+          .width(TOUCH_MIN)
+          .height(TOUCH_MIN)
+          .padding(4)
+          .accessibilityText('把草稿变成条件')
+          .onClick(() => {
+            if (this.draft.trim().length === 0) {
+              return;
+            }
+            this.commitDraft();
+            // 点图标会把焦点从 Search 拿走：补回来，用户接着输入下一个条件。
+            this.getUIContext().getFocusController().requestFocus(SEARCH_FIELD_ID);
           })
         SymbolGlyph($r('sys.symbol.bookmark'))
           .fontSize(18)
@@ -633,6 +670,7 @@ export struct SearchPage {
       .width('100%')
       .height(SEARCH_ROW_H)
       .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+
 
       if (!this.filtersExpanded) {
         Row({ space: 6 }) {
@@ -685,6 +723,65 @@ export struct SearchPage {
     Column().width('100%')
   }
 
+  /**
+   * 已确认条件（chips）：常驻在内容起始线、无限换行（不设行数上限、不横向滚动）。
+   *
+   * 为什么画在页面 `Stack` 而不是标题栏 `bottomBuilder`：实测那里只有首行（`SEARCH_ROW_H`）能收到点击，
+   * 超出的 chip 既不能切换包含/排除、也点不到 ×（渲染正常，命中区没有）。这里跟联想浮层同一层，命中正常。
+   * 高度实测回写 `chipsHeight`：列表顶部占位与联想浮层位置都靠它跟随，而不是按「每行 32vp」估。
+   */
+  @Builder
+  chipsRow() {
+    Column() {
+      Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
+        Repeat(this.segments)
+          .each((ri: RepeatItem<string>) => {
+            // 自定义 chip（不用 `ChipV2`）：官方组件在这里的关闭按钮命中不到（真机实证：点本体能切换、
+            // 点 × 没反应）。Row + 图标两个命中区都正常；它是内容控件，不是"自绘装饰遮罩"。
+            Row({ space: 6 }) {
+              Text(ri.item)
+                .fontSize(12)
+                .fontColor(ri.item.startsWith('-') ? $r('app.color.danger') : $r('app.color.text_primary'))
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+              SymbolGlyph($r('sys.symbol.xmark'))
+                .fontSize(12)
+                .fontColor([ri.item.startsWith('-') ? $r('app.color.danger') : $r('app.color.text_secondary')])
+                .onClick(() => {
+                  this.removeChip(ri.index);
+                })
+            }
+            .padding({ left: 10, right: 8, top: 6, bottom: 6 })
+            .backgroundColor(ri.item.startsWith('-')
+              ? $r('app.color.chip_danger_bg')
+              : $r('app.color.bg_secondary'))
+            .borderRadius(16)
+            .onClick(() => {
+              this.toggleChip(ri.index);
+            })
+            .margin(3)
+          })
+          // key 必须带内容：只按 index 的话，`-` 前缀切换后 key 不变，`Repeat` 会复用旧节点、
+          // 不重建，表现为"点了没反应"（真机实证：日志已进 `toggleChip`，色却不变）。
+          .key((token: string, index: number) => `${index}:${token}`)
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding({ left: PAGE_PADDING, right: PAGE_PADDING, top: 4, bottom: 6 })
+    // 不再 `.offset` / 背景色：它现在是列表里的一块正常内容（`.offset` 会变成固定浮层）。
+    .onAreaChange((_old: Area, now: Area) => {
+      const height: Length = now.height;
+      if (typeof height !== 'number' || height <= 0) {
+        return;
+      }
+      // 只在变化时写：避免「测高 → 重布局 → 又测出同一个值」的回声。
+      if (height !== this.chipsHeight) {
+        this.chipsHeight = height;
+      }
+    })
+  }
+
   build() {
     HdsNavDestination() {
       Column() {
@@ -694,6 +791,13 @@ export struct SearchPage {
             // 顶部避让随内容滚走（标题栏 + 功能区高度）：上滑时 HDS 动态收起整块搜索区，内容顶到状态栏下。
             ListItem() {
               Column().height(this.contentTop)
+            }
+            // 已确认条件：列表里的第一块内容，跟着列表一起滚走。
+            // 早先画在页面 `Stack` 里（`.offset` 固定定位），下滑时会「悬浮」盖住 Categories 卡片（真机截图踩到）。
+            if (this.segments.length > 0) {
+              ListItem() {
+                this.chipsRow()
+              }
             }
             if (this.filtersExpanded) {
               ListItem() {
@@ -717,36 +821,6 @@ export struct SearchPage {
                   .width('100%')
                   .height(44)
                   .alignItems(VerticalAlign.Center)
-          // 查询条件回显：把搜索框里的词拆成 chip，点 = 切换包含/排除，× = 删除。
-          if (this.queryChips.length > 0) {
-            Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
-              Repeat(this.queryChips)
-                .each((ci: RepeatItem<string>) => {
-                  ChipV2({
-                    chipV2Options: new ChipV2Options({
-                      label: new ChipV2Label({
-                        text: ci.item,
-                        activatedFontColor: ColorMetrics.resourceColor($r('app.color.danger'))
-                      }),
-                      size: ChipV2Size.SMALL,
-                      allowClose: true,
-                      activated: ci.item.startsWith('-'),
-                      activatedBackgroundColor: ColorMetrics.resourceColor($r('app.color.chip_danger_bg')),
-                      onClose: () => {
-                        this.removeChip(ci.index);
-                      },
-                      onClicked: () => {
-                        this.toggleChip(ci.index);
-                      }
-                    })
-                  })
-                    .margin(2)
-                })
-                .key((token: string) => token)
-            }
-            .width('100%')
-            .margin({ bottom: 4 })
-          }
           // 分区标题走官方 SubHeaderV2；筛选项走官方 ChipV2；每组一张卡（底 `bg_secondary`）。标签/上传者搜索同样可用。
           SubHeaderV2({
             title: new SubHeaderV2Title({ primaryTitle: 'Categories' })
@@ -1081,9 +1155,9 @@ export struct SearchPage {
         RefreshSpinner({
           pullOffset: this.pullOffset,
           isRefreshing: this.isRefreshing,
-          top: this.contentTop + 4
+          top: this.contentTop + this.chipsHeight + 4
         })
-        // 中文联想面板：同一 `Stack` 内、内容起始线之下，只占自身高度（不铺满 → 不吞下层手势，#21）。
+        // 中文联想面板：同一 `Stack` 内、chips 之下，只占自身高度（不铺满 → 不吞下层手势，#21）。
         // **不能**塞进标题栏 `bottomBuilder`：那里的高度是固定的 `headerHeight`，同时喂给 `contentTop`
         // 与刷新圈位置，撑大它会一次算错三处布局（#38 / #51）。
         if (this.suggestionsOpen) {
@@ -1097,7 +1171,7 @@ export struct SearchPage {
           }
           .width('100%')
           .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
-          .offset({ top: this.contentTop })
+          .offset({ top: this.contentTop + this.chipsHeight })
           .transition(TransitionEffect.OPACITY.animation({ duration: 120, curve: Curve.EaseOut }))
         }
         }

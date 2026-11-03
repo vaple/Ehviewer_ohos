@@ -63,6 +63,17 @@ export default function quickSearchTest() {
       expect(param.minRating).assertEqual(-1);
     });
 
+    it('quickSearchToParam_uploader_mode_adds_qualifier', 0, () => {
+      // 上传者入口已折叠成普通关键词：老记录（mode=1）恢复时补 `uploader:"…"`，
+      // 裸名字会被当普通关键词，搜出一堆无关画廊。
+      const legacy: QuickSearch = {
+        id: 1, name: '上传者 some one', mode: 1, category: 0, keyword: 'some one', language: '',
+        advanceSearch: 0, minRating: -1, pageFrom: -1, pageTo: -1, time: 0
+      };
+      expect(quickSearchToParam(legacy).query).assertEqual('uploader:"some one"');
+      expect(quickSearchToParam(legacy).kind).assertEqual('uploader');
+    });
+
     it('quickSearchToParam_tag_mode_writes_exact_syntax', 0, () => {
       // 修复前存的裸串（mode=2）再运行必须是 `namespace:"tag$"`：裸串会被搜索框拆成两个词。
       const legacy: QuickSearch = {

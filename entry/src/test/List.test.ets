@@ -28,6 +28,7 @@ import galleryPageParserTest from './parser/GalleryPageParser.test';
 import cookieStringParserTest from './parser/CookieStringParser.test';
 import searchQueryTest from './search/SearchQuery.test';
 import tagInputTest from './search/TagInput.test';
+import querySegmentsTest from './search/QuerySegments.test';
 import modelsTest from './model/Models.test';
 import galleryRatingTest from './model/GalleryRating.test';
 import photoSaverTest from './service/PhotoSaver.test';
@@ -84,6 +85,7 @@ export default function testsuite() {
   cookieStringParserTest();
   searchQueryTest();
   tagInputTest();
+  querySegmentsTest();
   modelsTest();
   galleryRatingTest();
   photoSaverTest();

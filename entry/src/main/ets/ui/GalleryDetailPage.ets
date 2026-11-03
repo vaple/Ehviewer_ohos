@@ -1117,10 +1117,11 @@ export struct GalleryDetailPage {
                     if (this.uploader.length === 0) {
                       return;
                     }
+                    // 上传者不再是一种搜索模式：它就是一条 `uploader:"…"` 条件，进搜索页后是普通 chip。
                     const param: SearchParam = {
-                      query: this.uploader,
+                      query: `uploader:"${this.uploader}"`,
                       title: `上传者 ${this.uploader}`,
-                      kind: 'uploader'
+                      kind: 'keyword'
                     };
                     this.pageStack?.pushPathByName('搜索', param);
                   })
