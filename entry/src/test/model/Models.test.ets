@@ -7,7 +7,7 @@ export default function modelsTest() {
     it('quick_search_has_real_columns', 0, () => {
       const qs: QuickSearch = {
         id: 0, category: 2, keyword: 'k', language: '',
-        advanceSearch: 0, minRating: 4, time: 123
+        advanceSearch: 0, minRating: 4, time: 123, saved: 1
       };
       expect(qs.category).assertEqual(2);
       expect(qs.minRating).assertEqual(4);

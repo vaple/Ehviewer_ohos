@@ -24,7 +24,7 @@ export struct QuickSearchSheet {
   private async reload(): Promise<void> {
     try {
       await DbHelper.init(this.context());
-      this.items = await QuickSearchDao.queryAll();
+      this.items = await QuickSearchDao.querySaved();
       this.message = this.items.length === 0 ? '还没有快速搜索' : '';
     } catch (e) {
       Logger.error('QSearch', `sheet load failed: ${e}`);

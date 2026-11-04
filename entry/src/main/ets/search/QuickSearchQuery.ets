@@ -66,3 +66,34 @@ export function quickSearchSummary(item: QuickSearch): string {
   }
   return parts.join(' · ');
 }
+
+/**
+ * 两条记录是否**同一次搜索**（历史去重：再搜一次只更新时间，不新增行）。
+ *
+ * 只比"能复现出同一次搜索"的字段；`time` / `id` / `saved` 不参与。
+ * `keyword` 比较时归一化空白与大小写：站点对大小写不敏感，
+ * `Female:"x"` 和 `female:"x"` 在用户眼里是同一条，存两条只会让历史变脏。
+ */
+export function sameSearch(a: QuickSearch, b: QuickSearch): boolean {
+  return normalizeKeyword(a.keyword) === normalizeKeyword(b.keyword) &&
+    a.category === b.category &&
+    a.advanceSearch === b.advanceSearch &&
+    a.language === b.language &&
+    a.minRating === b.minRating;
+}
+
+function normalizeKeyword(keyword: string): string {
+  return keyword.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+/** 历史超过 `keep` 条时，返回要删掉的那些 id（新的在前，所以是尾部）。 */
+export function historyIdsToPrune(items: QuickSearch[], keep: number): number[] {
+  if (keep <= 0 || items.length <= keep) {
+    return [];
+  }
+  const ids: number[] = [];
+  for (let i = keep; i < items.length; i++) {
+    ids.push(items[i].id);
+  }
+  return ids;
+}

@@ -1,5 +1,5 @@
 import { common } from '@kit.AbilityKit';
-import { AppStorageV2, PersistenceV2, promptAction, ChipV2, ChipV2Label, ChipV2Options, ChipV2Size, ColorMetrics, LengthMetrics, SubHeaderV2, SubHeaderV2Title, SymbolGlyphModifier } from '@kit.ArkUI';
+import { AppStorageV2, PersistenceV2, promptAction, ChipV2, ChipV2Label, ChipV2Options, ChipV2Size, LengthMetrics, SymbolGlyphModifier } from '@kit.ArkUI';
 import { EhSite, EhUrl } from '../network/EhUrl';
 import { CookieStore } from '../network/CookieStore';
 import { RcpHttpClient } from '../network/RcpHttpClient';
@@ -14,7 +14,7 @@ import { AppSettings } from '../state/AppSettings';
 import { WindowState } from '../state/WindowState';
 import { HdsNavDestination, HideMode, HdsNavigationMenuItemOptions } from '@kit.UIDesignKit';
 import { GalleryRow, GalleryRowItem, loadMissingThumbs, pushGalleryDetail } from './GalleryRow';
-import { fCatsMask, excludedFromSelected, encodeAdvance, ALL_CATS, languageQueryOf, SEARCH_LANGUAGES, exclusionQueryOf, SearchFilters } from '../search/SearchQuery';
+import { fCatsMask, excludedFromSelected, encodeAdvance, ALL_CATS, languageQueryOf, exclusionQueryOf, SearchFilters } from '../search/SearchQuery';
 import { shouldSuggest, trailingToken, TagToken } from '../search/TagInput';
 import { appendDraft, joinQueryText, splitQueryTokens, suggestionChip } from '../search/QuerySegments';
 import { TagCandidate } from '../tagdb/TagCandidate';
@@ -25,41 +25,15 @@ import { DbHelper } from '../db/DbHelper';
 import { Filter } from '../model/Filter';
 import { PagedDataSource, PREFETCH_TAIL, shouldFetchMore } from '../common/PagedList';
 import { QuickSearchDao } from '../db/dao/QuickSearchDao';
-import { QuickSearch } from '../model/QuickSearch';
-import { hasSavedKeyword } from '../search/QuickSearchQuery';
+import { QuickSearch, SEARCH_HISTORY, SEARCH_SAVED } from '../model/QuickSearch';
+import { hasSavedKeyword, historyIdsToPrune, quickSearchToParam, sameSearch } from '../search/QuickSearchQuery';
 import { QuickSearchSheet } from './QuickSearchSheet';
-import { CARD_GAP, CARD_RADIUS, PAGE_PADDING, TOUCH_MIN } from './Materials';
+import { FilterPanel } from './FilterPanel';
+import { SearchHistoryPanel } from './SearchHistoryPanel';
+import { SCOPES, scopeShort } from '../search/FilterCatalog';
+import { CARD_GAP, PAGE_PADDING, TOUCH_MIN } from './Materials';
 import { navTitleBarStyle, TITLE_BAR_H } from './NavStyle';
 import { RefreshSpinner } from './RefreshSpinner';
-
-/** 搜索范围 chip 项（`f_sname/f_stags/f_sdesc/f_storr`；选中 = 只搜该范围；网站英文原文）。 */
-interface ScopeItem {
-  label: string;
-  key: string;
-}
-
-const SCOPES: ScopeItem[] = [
-  { label: 'Gallery Name', key: 'title' },
-  { label: 'Gallery Tags', key: 'tags' },
-  { label: 'Gallery Description', key: 'desc' },
-  { label: 'Torrents', key: 'torrents' }
-];
-
-/** 最低星级档（源 spinner `position + 2`）。 */
-const STARS: number[] = [2, 3, 4, 5];
-
-/** 语言下拉选项（首位 `all` = 不限语言；其余为站点原文，保持全英文避免中英割裂）。 */
-const LANG_ANY: string = 'all';
-const LANG_OPTIONS: string[] = [LANG_ANY].concat(SEARCH_LANGUAGES);
-
-/** `Select` 的官方选项模型（与 `LANG_OPTIONS` 同序；`Select` 只要 `{ value }`）。 */
-function langSelectOptions(): SelectOption[] {
-  const out: SelectOption[] = [];
-  for (let i = 0; i < LANG_OPTIONS.length; i++) {
-    out.push({ value: LANG_OPTIONS[i] });
-  }
-  return out;
-}
 
 /** 标题栏底部功能区：单行搜索行高度（vp）。 */
 const SEARCH_ROW_H: number = 52;
@@ -73,38 +47,14 @@ const SUGGEST_DEBOUNCE_MS: number = 150;
 /** 一次取的候选数：面板内部可滚动，多取一些让「第 7 条以后」也能在面板里翻到（排序已在 `searchTags` 内完成）。 */
 const SUGGEST_FETCH_LIMIT: number = 20;
 
-/** 分类 chip 项（位值对照源 `EhConfig`；点亮 = 选中该分类 → 换算排除集发 `f_cats`；网站英文原文）。 */
-interface CatItem {
-  label: string;
-  bit: number;
-}
-
-const CATS: CatItem[] = [
-  { label: 'DOUJINSHI', bit: 0x2 },
-  { label: 'MANGA', bit: 0x4 },
-  { label: 'ARTIST CG', bit: 0x8 },
-  { label: 'GAME CG', bit: 0x10 },
-  { label: 'IMAGE SET', bit: 0x20 },
-  { label: 'COSPLAY', bit: 0x40 },
-  { label: 'ASIAN PORN', bit: 0x80 },
-  { label: 'NON-H', bit: 0x100 },
-  { label: 'WESTERN', bit: 0x200 },
-  { label: 'MISC', bit: 0x1 }
-];
-
-/** 范围短名（摘要行用；`f_s*` 语义不变，仅展示从简）。 */
-function scopeShort(key: string): string {
-  if (key === 'title') {
-    return '名称';
-  }
-  if (key === 'tags') {
-    return '标签';
-  }
-  if (key === 'desc') {
-    return '描述';
-  }
-  return '种子';
-}
+/** 搜索历史保留条数（超出按时间裁掉最旧的）。 */
+const HISTORY_KEEP: number = 100;
+/** 浮层内容：无 / 最近搜索 / 标签联想。三者互斥，同一层只画一个。 */
+const PANEL_NONE: number = 0;
+const PANEL_HISTORY: number = 1;
+const PANEL_SUGGEST: number = 2;
+/** 失焦后延迟收起（ms）：点历史行时输入框会先失焦，立刻收会把这次点击吃掉。 */
+const PANEL_BLUR_DELAY_MS: number = 200;
 
 /**
  * 搜索页（关键词 / 标签两态经 `SearchParam.kind` 进入；上传者已折叠成 `uploader:"…"` 普通条件）。
@@ -112,6 +62,9 @@ function scopeShort(key: string): string {
  *
  * 查询模型：输入框只放**草稿**，回车 / ＋ / 点候选才把草稿变成一条 chip（`segments`）；
  * 发出去的 `f_search` 由 `queryText`（条件 + 草稿）拼成，不再把整串塞回输入框。
+ *
+ * 筛选模型：分类 / 范围 / 语言 / 星级 / 高级参数在**筛选半模态**里编辑，点「应用」才回写并重搜
+ * （面板盖住结果时即时重搜看不到反馈，只会把每次点击变成一次整页请求）。
  */
 @ComponentV2
 export struct SearchPage {
@@ -122,7 +75,6 @@ export struct SearchPage {
   })!;
   /** 系统安全区（内容顶部避让 = safeTop + 标题栏 + 功能区）。 */
   private windowState: WindowState = AppStorageV2.connect(WindowState, () => new WindowState())!;
-  @Local showQuickSearch: boolean = false;
   /** 语言 chip 单选（`language:xxx` 站点原文；空 = 不过滤）。 */
   @Local selectedLang: string = '';
   /** 启用的屏蔽规则（搜索 `-` chips 用；`load` 内刷新）。 */
@@ -162,12 +114,21 @@ export struct SearchPage {
   /** 官方高级搜索：页数区间（空 = 不限）。 */
   @Local pageFromText: string = '';
   @Local pageToText: string = '';
-  /** 高级选项默认折叠（低频）。 */
-  @Local advancedExpanded: boolean = false;
-  /** 高级筛选展开态：首进展开，提交搜索后自动收起（摘要行留在标题栏，点之再展开）。 */
-  @Local filtersExpanded: boolean = true;
   private isLoading: boolean = false;
-  /** 结果列表滚动器（折叠/展开筛选时回顶用；不再有吸顶 header）。 */
+  /** 请求在途期间又来了刷新意图：结束后补跑一次（最后一次意图获胜）。 */
+  private pendingRefresh: boolean = false;
+  /** 筛选表单展开态：首进展开（空查询时它就是这一屏的内容），提交搜索后收起。 */
+  @Local filtersExpanded: boolean = true;
+  /** 半模态开关：现在只剩「快速搜索」一种内容（筛选已回到内联）。 */
+  @Local showSheet: boolean = false;
+  /**
+   * 有请求在飞（可观察）：驱动内容起始线的转圈。
+   * `isLoading` 是普通字段（不触发重绘），不能拿来驱动 UI。
+   */
+  @Local busy: boolean = false;
+  /** 最近搜索（新的在前；提交 / 删除后重读）。 */
+  @Local history: QuickSearch[] = [];
+  /** 结果列表滚动器（新搜索回顶用；不再有吸顶 header）。 */
   private listScroller: Scroller = new Scroller();
   /** 分页状态唯一持有者（items / 下一页游标 / 已访问 URL）。 */
   private feed: GalleryListFeed = new GalleryListFeed(async (url: string): Promise<GalleryListPage> => {
@@ -192,10 +153,12 @@ export struct SearchPage {
   @Local suggestions: TagCandidate[] = [];
   /** 产生这批候选时用的片段：入列前用它核对草稿是否还是同一串（期间用户可能已改输入）。 */
   @Local suggestToken: TagToken | undefined = undefined;
-  /** 联想面板是否展开（`if` 的条件必须是可观察状态，见 `ui/AGENTS.md` #19）。 */
-  @Local suggestionsOpen: boolean = false;
+  /** 覆盖层内容：无 / 最近搜索 / 标签联想（`if` 的条件必须是可观察状态，见 `ui/AGENTS.md` #19）。 */
+  @Local panelKind: number = PANEL_NONE;
   /** 联想防抖定时器（`-1` = 没有待执行的回调）。 */
   private suggestTimer: number = -1;
+  /** 失焦收起的延迟定时器（点历史行时不能立刻收，否则点击落在空处）。 */
+  private panelBlurTimer: number = -1;
 
   /**
    * 页面被 pop：清掉待发的联想回调。
@@ -203,17 +166,33 @@ export struct SearchPage {
    */
   aboutToDisappear(): void {
     this.cancelSuggestTimer();
+    this.cancelPanelBlurTimer();
   }
 
   private context(): common.Context {
     return this.getUIContext().getHostContext() as common.Context;
   }
 
-  /** 标题栏底部功能区高度：单行搜索 + chip 行（实测）+ 收起态摘要行。 */
+  /**
+   * 标题栏底部功能区高度：单行搜索 + （表单收起且筛选非默认时）摘要行。
+   *
+   * 摘要行按**内容**决定是否存在：全默认筛选时它没有任何字可显示，
+   * 常驻就变成一条空行。表单展开时摘要与表单内容重复，也不画。
+   */
   @Computed get headerHeight(): number {
     // chips 画在页面内容区（见 `chipsRow`），不再进标题栏高度：
     // 标题栏的 bottomBuilder 里，超出首屏高度的子节点拿不到点击（实测 chip 点不动）。
-    return SEARCH_ROW_H + (this.filtersExpanded ? 0 : SUMMARY_ROW_H);
+    const showSummary: boolean = !this.filtersExpanded && this.activeChips.length > 0;
+    return SEARCH_ROW_H + (showSummary ? SUMMARY_ROW_H : 0);
+  }
+
+  /** 这次提交是否真的构成一次搜索（空查询 + 无语言/排除时 `load` 会直接返回，历史也不该记）。 */
+  @Computed get searchable(): boolean {
+    if (this.kind !== 'keyword') {
+      return true;
+    }
+    return this.queryText.length > 0 || this.selectedLang.length > 0 ||
+      exclusionQueryOf(this.activeRules, this.ignoredExclusions).length > 0;
   }
 
   /**
@@ -240,7 +219,7 @@ export struct SearchPage {
     return count;
   }
 
-  /** 收起态摘要：只列**非默认**条件（默认全分类/全范围/不限语言/不限星级不刷屏）；无则空。 */
+  /** 摘要：只列**非默认**条件（默认全分类/全范围/不限语言/不限星级不刷屏）；无则空。 */
   @Computed get activeChips(): string[] {
     const chips: string[] = [];
     if (this.selectedBits.length !== ALL_CATS.length) {
@@ -264,21 +243,189 @@ export struct SearchPage {
     if (this.activeExclusions > 0) {
       chips.push(`${this.activeExclusions} 排除`);
     }
+    // 高级三项藏得最深（在「更多筛选」里），摘要不列就等于"改了看不见"。
+    if (this.onlyTorrents) {
+      chips.push('有种子');
+    }
+    if (this.ignoreFilters) {
+      chips.push('忽略站点过滤');
+    }
+    const from: number = SearchPage.parsePage(this.pageFromText);
+    const to: number = SearchPage.parsePage(this.pageToText);
+    if (from > 0 || to > 0) {
+      chips.push(`页数 ${from > 0 ? `${from}` : '不限'}–${to > 0 ? `${to}` : '不限'}`);
+    }
     return chips;
   }
 
-  /** 提交搜索（键盘回车 / 蓝「搜索」/ 快搜运行）：收联想 + 收键盘 + 收筛选 + 回顶，再重搜。 */
+  /**
+   * 提交搜索（回车 / 蓝「搜索」/ 快搜运行 / 点历史）。
+   * 收浮层 + 收键盘 + 收筛选表单 + 回顶，再重搜——这是**唯一**的生效点
+   * （表单里的改动在此之前只是页面状态，不发请求）。顺手记一条搜索历史。
+   */
   private submitSearch(): void {
-    this.showQuickSearch = false;
-    this.closeSuggestions();
+    this.closePanels();
     this.searchController.stopEditing();
     if (this.filtersExpanded) {
       this.getUIContext().animateTo({ duration: 250, curve: Curve.EaseInOut }, () => {
         this.filtersExpanded = false;
         this.listScroller.scrollToIndex(0);
       });
+    } else {
+      this.listScroller.scrollToIndex(0);
     }
+    this.recordHistory();
     this.load(true);
+  }
+
+  /** 展开筛选表单（摘要 chip 点开也是走这里）。 */
+  private expandFilters(): void {
+    if (this.filtersExpanded) {
+      return;
+    }
+    this.closePanels();
+    this.getUIContext().animateTo({ duration: 250, curve: Curve.EaseInOut }, () => {
+      this.filtersExpanded = true;
+      this.listScroller.scrollToIndex(0);
+    });
+  }
+
+  private collapseFilters(): void {
+    if (!this.filtersExpanded) {
+      return;
+    }
+    this.getUIContext().animateTo({ duration: 250, curve: Curve.EaseInOut }, () => {
+      this.filtersExpanded = false;
+    });
+  }
+
+  /**
+   * 记一条搜索历史：同一次搜索只更新时间（提到最前），超出上限裁掉最旧的。
+   * 失败只记日志——历史是便利功能，不能因为它让搜索失败。
+   */
+  private async recordHistory(): Promise<void> {
+    if (!this.searchable) {
+      return;
+    }
+    const record: QuickSearch = {
+      id: 0,
+      category: fCatsMask(excludedFromSelected(this.selectedBits, ALL_CATS)),
+      keyword: this.queryText.trim(),
+      language: this.selectedLang,
+      advanceSearch: encodeAdvance(this.scopes, this.langFilter),
+      minRating: this.minRating,
+      time: Date.now(),
+      saved: SEARCH_HISTORY
+    };
+    try {
+      await DbHelper.init(this.context());
+      const items: QuickSearch[] = await QuickSearchDao.queryHistory(HISTORY_KEEP);
+      let same: QuickSearch | undefined = undefined;
+      for (let i = 0; i < items.length; i++) {
+        if (sameSearch(items[i], record)) {
+          same = items[i];
+          break;
+        }
+      }
+      if (same !== undefined) {
+        await QuickSearchDao.touch(same.id, record.time);
+      } else {
+        await QuickSearchDao.insert(record);
+        const fresh: QuickSearch[] = await QuickSearchDao.queryHistory(HISTORY_KEEP + 20);
+        await QuickSearchDao.pruneHistory(historyIdsToPrune(fresh, HISTORY_KEEP));
+      }
+      await this.reloadHistory();
+    } catch (e) {
+      Logger.error('Search', `history record failed: ${e}`);
+    }
+  }
+
+  /** 重读最近搜索（面板与「清空」都靠它）。 */
+  private async reloadHistory(): Promise<void> {
+    try {
+      await DbHelper.init(this.context());
+      this.history = await QuickSearchDao.queryHistory(HISTORY_KEEP);
+      if (this.panelKind === PANEL_HISTORY && this.history.length === 0) {
+        // 清空 / 删到最后一条：面板没有内容可画，直接收起。
+        this.closePanels();
+      }
+    } catch (e) {
+      Logger.error('Search', `history load failed: ${e}`);
+    }
+  }
+
+  private async deleteHistory(item: QuickSearch): Promise<void> {
+    try {
+      await DbHelper.init(this.context());
+      await QuickSearchDao.delete(item.id);
+      await this.reloadHistory();
+    } catch (e) {
+      Logger.error('Search', `history delete failed id=${item.id}: ${e}`);
+    }
+  }
+
+  private async clearHistory(): Promise<void> {
+    try {
+      await DbHelper.init(this.context());
+      await QuickSearchDao.clearHistory();
+      await this.reloadHistory();
+    } catch (e) {
+      Logger.error('Search', `history clear failed: ${e}`);
+    }
+  }
+
+  /** 点历史：整组条件回填 → 直接搜（`kind` 恒为 keyword，同 `quickSearchToParam` 的约定）。 */
+  private runHistory(item: QuickSearch): void {
+    this.closePanels();
+    this.applyParam(quickSearchToParam(item));
+    this.submitSearch();
+  }
+
+  /** 打开半模态（现在只剩「快速搜索」：筛选已回到内联，不再走浮层）。 */
+  private openQuickSheet(): void {
+    this.showSheet = true;
+  }
+
+  /** 收起覆盖层（联想 / 历史 / 延迟定时器一起清）。 */
+  private closePanels(): void {
+    this.cancelPanelBlurTimer();
+    this.cancelSuggestTimer();
+    this.panelKind = PANEL_NONE;
+    this.suggestions = [];
+    this.suggestToken = undefined;
+  }
+
+  private cancelPanelBlurTimer(): void {
+    if (this.panelBlurTimer >= 0) {
+      clearTimeout(this.panelBlurTimer);
+      this.panelBlurTimer = -1;
+    }
+  }
+
+  /**
+   * 输入框获得焦点：草稿为空时浮出最近搜索（有字时由联想接管）。
+   * 没有历史就什么都不画——页面本身有筛选表单，不会是一块空白。
+   */
+  private onFieldFocus(): void {
+    this.cancelPanelBlurTimer();
+    if (this.draft.trim().length > 0) {
+      return;
+    }
+    if (this.history.length > 0) {
+      this.panelKind = PANEL_HISTORY;
+    }
+  }
+
+  /**
+   * 输入框失焦：延迟收起。
+   * 点历史行的瞬间输入框会先失焦，立刻收会让这次点击落在空处。
+   */
+  private onFieldBlur(): void {
+    this.cancelPanelBlurTimer();
+    this.panelBlurTimer = setTimeout(() => {
+      this.panelBlurTimer = -1;
+      this.closePanels();
+    }, PANEL_BLUR_DELAY_MS);
   }
 
   /**
@@ -313,25 +460,18 @@ export struct SearchPage {
     }
     const token: TagToken | undefined = trailingToken(value);
     if (token === undefined || !shouldSuggest(token.word)) {
-      this.closeSuggestions();
+      this.closePanels();
       return;
     }
     // 标签库未就绪 / 翻译开关关闭时 `TagDb.search` 返回 `[]` → 保持关闭，不显示空卡片。
     const found: TagCandidate[] = TagDb.search(token.word, SUGGEST_FETCH_LIMIT);
     if (found.length === 0) {
-      this.closeSuggestions();
+      this.closePanels();
       return;
     }
     this.suggestions = found;
     this.suggestToken = token;
-    this.suggestionsOpen = true;
-  }
-
-  private closeSuggestions(): void {
-    this.cancelSuggestTimer();
-    this.suggestionsOpen = false;
-    this.suggestions = [];
-    this.suggestToken = undefined;
+    this.panelKind = PANEL_SUGGEST;
   }
 
   /**
@@ -343,11 +483,11 @@ export struct SearchPage {
   private pickSuggestion(ns: string, tag: string): void {
     const token: TagToken | undefined = this.suggestToken;
     if (token === undefined) {
-      this.closeSuggestions();
+      this.closePanels();
       return;
     }
     if (this.draft.substring(token.start, token.end) !== token.word) {
-      this.closeSuggestions();
+      this.closePanels();
       return;
     }
     const chip: string = suggestionChip(this.draft, ns, tag);
@@ -356,7 +496,7 @@ export struct SearchPage {
     const head: string = this.draft.substring(0, token.start).trim();
     const kept: string[] = head.length === 0 || head === '-' || head === '~' ? [] : splitQueryTokens(head);
     kept.push(chip);
-    this.closeSuggestions();
+    this.closePanels();
     this.segments = this.segments.concat(kept);
     this.draft = '';
     this.searchController.caretPosition(0);
@@ -371,31 +511,10 @@ export struct SearchPage {
     if (next === this.segments) {
       return;
     }
-    this.closeSuggestions();
+    this.closePanels();
     this.segments = next;
     this.draft = '';
     this.searchController.caretPosition(0);
-  }
-
-  /** 摘要 chip → 重新展开高级选项并回顶（与折叠互为反向动画）。 */
-  private expandFilters(): void {
-    if (this.filtersExpanded) {
-      return;
-    }
-    this.getUIContext().animateTo({ duration: 250, curve: Curve.EaseInOut }, () => {
-      this.filtersExpanded = true;
-      this.listScroller.scrollToIndex(0);
-    });
-  }
-
-  /** 展开态「完成」→ 收起（不重搜：条件已即时生效）。 */
-  private collapseFilters(): void {
-    if (!this.filtersExpanded) {
-      return;
-    }
-    this.getUIContext().animateTo({ duration: 250, curve: Curve.EaseInOut }, () => {
-      this.filtersExpanded = false;
-    });
   }
 
   /** 存为快速搜索；名取当前查询（`f_search` 主体，URL 也只用它，不再按模式改写）。 */
@@ -407,7 +526,8 @@ export struct SearchPage {
     }
     try {
       await DbHelper.init(this.context());
-      const exist: QuickSearch[] = await QuickSearchDao.queryAll();
+      // 只跟「快搜」判重：历史里本来就有同一条搜索，不能因此拦下保存。
+      const exist: QuickSearch[] = await QuickSearchDao.querySaved();
       if (hasSavedKeyword(exist, keyword)) {
         promptAction.showToast({ message: '快搜里已有该搜索' });
         return;
@@ -418,7 +538,9 @@ export struct SearchPage {
         keyword: keyword,
         language: this.selectedLang,
         advanceSearch: encodeAdvance(this.scopes, this.langFilter),
-        minRating: this.minRating, time: Date.now()
+        minRating: this.minRating,
+        time: Date.now(),
+        saved: SEARCH_SAVED
       });
       promptAction.showToast({ message: '已存到快搜' });
     } catch (e) {
@@ -430,7 +552,7 @@ export struct SearchPage {
   /** 路由参数（含快搜运行带条件）→ 本页状态；缺字段回退默认。 */
   private applyParam(param: SearchParam): void {
     // 换了一套查询条件：旧候选与它的片段区间不再对应新草稿，必须一起收起。
-    this.closeSuggestions();
+    this.closePanels();
     // 入口给的是完整查询串（标签/上传者都已是 `ns:"tag$"` / `uploader:"…"` 正规语法）：
     // 按引号安全切词回填成 chips，输入框留空——用户接下来敲的是**追加**条件。
     this.segments = splitQueryTokens(param.query);
@@ -447,7 +569,6 @@ export struct SearchPage {
     this.ignoreFilters = false;
     this.pageFromText = '';
     this.pageToText = '';
-    this.advancedExpanded = false;
     if (param.selectedBits !== undefined) {
       this.selectedBits = param.selectedBits.slice();
     }
@@ -480,7 +601,7 @@ export struct SearchPage {
     const token: string = next[index];
     next[index] = token.startsWith('-') ? token.substring(1) : `-${token}`;
     // 条件变了：候选是按旧草稿算的，留着会按过期区间入列。
-    this.closeSuggestions();
+    this.closePanels();
     this.segments = next;
     this.load(true);
   }
@@ -491,7 +612,7 @@ export struct SearchPage {
     }
     const next: string[] = this.segments.slice();
     next.splice(index, 1);
-    this.closeSuggestions();
+    this.closePanels();
     if (next.length === 0) {
       // 最后一条 chip 删掉后 chip 行不再渲染：`onAreaChange` 不会再来，高度必须在这里归零。
       this.chipsHeight = 0;
@@ -549,26 +670,30 @@ export struct SearchPage {
 
   private async load(refresh: boolean): Promise<void> {
     if (this.isLoading) {
+      // 在途时不并发（`feed.load` 会先清 rows，两个 refresh 撞一起会互相清空），
+      // 但**不能把这次意图丢掉**：记下来，当前请求结束后用最新状态补一次。
+      // 丢掉的后果是"chip 亮了/点了搜索，结果还是旧的"，只能再点一次。
+      if (refresh) {
+        this.pendingRefresh = true;
+      }
       return;
     }
     // 规则只在刷新/首载时重读；翻页复用已缓存的 activeRules（免每页一次 DB 读）。
     if (refresh) {
       await this.reloadRules();
     }
-    const exclFrag: string = exclusionQueryOf(this.activeRules, this.ignoredExclusions);
-    if (this.kind === 'keyword' && this.queryText.length === 0 &&
-      this.selectedLang.length === 0 && exclFrag.length === 0) {
+    if (!this.searchable) {
       this.message = '';
       this.isRefreshing = false;
       return;
     }
     this.isLoading = true;
+    this.busy = true;
     try {
       const site: EhSite = this.settings.site;
       const cookies: CookieStore = new CookieStore();
       await cookies.init(this.context());
       const client: EhClient = new EhClient(new RcpHttpClient(), cookies);
-      this.message = '搜索中…';
       // 后续页面一律用站点给的 next（搜索是 `?next=<gid>` 游标）；这里只构造第一页。
       await this.feed.load(this.buildUrl(site), refresh);
       this.items = this.feed.items;
@@ -581,17 +706,17 @@ export struct SearchPage {
       Logger.error('Search', `load failed: ${e}`);
       this.message = errorText(e as Object);
     }
+    this.busy = false;
     this.isRefreshing = false;
     this.isLoading = false;
+    if (this.pendingRefresh) {
+      this.pendingRefresh = false;
+      this.load(true);
+    }
   }
 
   /** 排除项唯一键（规则 text 本身就是完整查询词，与 `exclusionQueryOf` 的 ignored 键一致）。 */
   private exclusionKey(rule: Filter): string {
-    return rule.text;
-  }
-
-  /** 排除 chip 显示文本（规则即完整查询词）。 */
-  private exclusionLabel(rule: Filter): string {
     return rule.text;
   }
 
@@ -612,7 +737,7 @@ export struct SearchPage {
   private titleMenus(): HdsNavigationMenuItemOptions[] {
     return [
       this.menuItem($r('sys.symbol.clock'), '快速搜索', () => {
-        this.showQuickSearch = true;
+        this.openQuickSheet();
       }),
       this.menuItem($r('sys.symbol.bookmark'), '保存为快速搜索', () => {
         this.saveQuick();
@@ -620,24 +745,33 @@ export struct SearchPage {
     ];
   }
 
+  /**
+   * 半模态内容（现在只剩「快速搜索」；筛选已回到页面内联）。
+   * `@Builder` 作为 sheet 内容必须有单一根容器，否则会静默不弹（#45）。
+   */
   @Builder
-  quickSearchSheet() {
-    QuickSearchSheet({
-      onRun: (param: SearchParam) => {
-        this.showQuickSearch = false;
-        this.searchController.stopEditing();
-        this.applyParam(param);
-        this.submitSearch();
-      }
-    })
+  sheetContent() {
+    Column() {
+      QuickSearchSheet({
+        onRun: (param: SearchParam) => {
+          this.showSheet = false;
+          this.searchController.stopEditing();
+          this.applyParam(param);
+          this.submitSearch();
+        }
+      })
+    }
+    .width('100%')
+    .height('100%')
   }
 
   /**
-   * 标题栏底部功能区：`Search | ＋` 单行 + 已确认条件 chips；收起态追加筛选摘要行。
+   * 标题栏底部功能区：`Search | 筛选 | ＋` 单行 + （表单收起且筛选非默认时）摘要行。
    *
-   * 行内只留输入框与「＋」：三个 44vp 热区 + 3 个 8vp 间距会吃掉四成行宽（360vp 屏上输入区只剩 ~70vp，
-   * 占位文字被截成「输…」）。`clock`（快速搜索）与 `bookmark`（存为快搜）是页面级动作，
-   * 走标题栏官方菜单槽位（`titleBar.content.menu`），图形、热区与材质由 HDS 提供。
+   * 筛选入口放在搜索行里：它是"搜索的修饰"，位置固定、常驻，且不会再出现"展开/收起各占一行"。
+   * 摘要仅在**表单收起**时出现：展开时摘要和表单内容重复，全默认时又没有字可显示。
+   * `clock`（快速搜索）与 `bookmark`（存为快搜）是页面级动作，走标题栏官方菜单槽位，
+   * 图形、热区与材质由 HDS 提供。
    */
   @Builder
   headerArea() {
@@ -650,14 +784,47 @@ export struct SearchPage {
           .onChange((value: string) => {
             // 输入框只承载草稿：空格就是空格（英文 tag 自带空格），不做「空格成词」。
             this.draft = value;
+            if (value.trim().length === 0) {
+              // 清空了输入：把最近搜索换回来（有历史时），没有就什么都不画。
+              this.cancelSuggestTimer();
+              this.panelKind = this.history.length > 0 ? PANEL_HISTORY : PANEL_NONE;
+              return;
+            }
+            // 一敲字就撤掉历史（等联想的防抖结果，别让两个内容同时挂着）。
+            if (this.panelKind === PANEL_HISTORY) {
+              this.panelKind = PANEL_NONE;
+            }
             // 标签联想：只看草稿，中英文走同一条路；太短的片段（拉丁 <2 字符）在 `runSuggest` 里被挡掉。
             this.scheduleSuggest(value);
+          })
+          .onFocus(() => {
+            this.onFieldFocus();
+          })
+          .onBlur(() => {
+            this.onFieldBlur();
           })
           .onSubmit((value: string) => {
             // 回车 = 先把草稿变成 chip，再搜（搜的是同一串条件，只是输入框腾空好接着拼）。
             this.draft = value;
             this.commitDraft();
             this.submitSearch();
+          })
+        // 筛选入口：展开/收起页面内的筛选表单。展开中或带着非默认筛选时用品牌色。
+        SymbolGlyph($r('sys.symbol.slider_horizontal_2'))
+          .fontSize(20)
+          .fontColor([this.filtersExpanded || this.activeChips.length > 0
+            ? $r('sys.color.brand') : $r('app.color.text_secondary')])
+          .width(TOUCH_MIN)
+          .height(TOUCH_MIN)
+          .padding(6)
+          .id('search-filter')
+          .accessibilityText(this.filtersExpanded ? '收起筛选' : '展开筛选')
+          .onClick(() => {
+            if (this.filtersExpanded) {
+              this.collapseFilters();
+            } else {
+              this.expandFilters();
+            }
           })
         // 「＋」：草稿成词（与回车等价，但留着键盘）。草稿为空时是空操作。
         SymbolGlyph($r('sys.symbol.plus'))
@@ -680,20 +847,9 @@ export struct SearchPage {
       .height(SEARCH_ROW_H)
       .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
 
-
-      if (!this.filtersExpanded) {
-        Row({ space: 6 }) {
-          SymbolGlyph($r('sys.symbol.line_3_horizontal'))
-            .fontSize(20)
-            .fontColor([$r('sys.color.brand')])
-            .width(TOUCH_MIN)
-            .height(SUMMARY_ROW_H)
-            .padding(6)
-            .id('search-filter')
-            .accessibilityText('筛选')
-            .onClick(() => {
-              this.expandFilters();
-            })
+      // 摘要：只在「表单已收起 + 有非默认筛选」时出现；点任意 chip 展开表单（改条件的地方就在那儿）。
+      if (!this.filtersExpanded && this.activeChips.length > 0) {
+        Row() {
           Scroll() {
             Row({ space: 6 }) {
               Repeat(this.activeChips)
@@ -802,307 +958,56 @@ export struct SearchPage {
               Column().height(this.contentTop)
             }
             // 已确认条件：列表里的第一块内容，跟着列表一起滚走。
-            // 早先画在页面 `Stack` 里（`.offset` 固定定位），下滑时会「悬浮」盖住 Categories 卡片（真机截图踩到）。
+            // 早先画在页面 `Stack` 里（`.offset` 固定定位），下滑时会「悬浮」盖住筛选卡（真机截图踩到）。
             if (this.segments.length > 0) {
               ListItem() {
                 this.chipsRow()
               }
             }
+            // 筛选表单：空查询时它就是这一屏的内容，所以首进展开；提交搜索后收起，让结果占满屏。
             if (this.filtersExpanded) {
               ListItem() {
-                Column() {
-                  Row() {
-                    Text('FILTERS')
-                      .fontSize(13)
-                      .fontColor($r('app.color.text_secondary'))
-                    Blank()
-                    SymbolGlyph($r('sys.symbol.chevron_up'))
-                      .fontSize(18)
-                      .fontColor([$r('app.color.text_secondary')])
-                      .width(TOUCH_MIN)
-                      .height(TOUCH_MIN)
-                      .padding(8)
-                      .accessibilityText('收起筛选')
-                      .onClick(() => {
-                        this.collapseFilters();
-                      })
+                FilterPanel({
+                  selectedBits: this.selectedBits,
+                  scopes: this.scopes,
+                  selectedLang: this.selectedLang,
+                  minRating: this.minRating,
+                  langFilter: this.langFilter,
+                  onlyTorrents: this.onlyTorrents,
+                  ignoreFilters: this.ignoreFilters,
+                  pageFromText: this.pageFromText,
+                  pageToText: this.pageToText,
+                  activeRules: this.activeRules,
+                  ignoredExclusions: this.ignoredExclusions,
+                  onBits: (bits: number[]) => {
+                    this.selectedBits = bits;
+                  },
+                  onScopes: (scopes: string[]) => {
+                    this.scopes = scopes;
+                  },
+                  onLang: (lang: string) => {
+                    this.selectedLang = lang;
+                  },
+                  onRating: (rating: number) => {
+                    this.minRating = rating;
+                  },
+                  onTorrents: (value: boolean) => {
+                    this.onlyTorrents = value;
+                  },
+                  onSiteFilters: (value: boolean) => {
+                    this.ignoreFilters = value;
+                  },
+                  onPages: (from: string, to: string) => {
+                    this.pageFromText = from;
+                    this.pageToText = to;
+                  },
+                  onIgnored: (ignored: string[]) => {
+                    this.ignoredExclusions = ignored;
                   }
-                  .width('100%')
-                  .height(44)
-                  .alignItems(VerticalAlign.Center)
-          // 分区标题走官方 SubHeaderV2；筛选项走官方 ChipV2；每组一张卡（底 `bg_secondary`）。标签/上传者搜索同样可用。
-          SubHeaderV2({
-            title: new SubHeaderV2Title({ primaryTitle: 'Categories' })
-          })
-          Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
-            Repeat(CATS)
-              .each((ri: RepeatItem<CatItem>) => {
-                ChipV2({
-                  chipV2Options: new ChipV2Options({
-                    label: new ChipV2Label({ text: ri.item.label }),
-                    size: ChipV2Size.SMALL,
-                    allowClose: false,
-                    activated: this.selectedBits.indexOf(ri.item.bit) >= 0,
-                    onClicked: () => {
-                      const at: number = this.selectedBits.indexOf(ri.item.bit);
-                      if (at >= 0) {
-                        this.selectedBits = this.selectedBits.filter((b: number) => b !== ri.item.bit);
-                      } else {
-                        this.selectedBits = this.selectedBits.concat([ri.item.bit]);
-                      }
-                      this.searchController.stopEditing();
-                      this.load(true);
-                    }
-                  })
                 })
-                  .margin(4)
-              })
-              .key((cat: CatItem) => cat.label)
-          }
-          .width('100%')
-          .padding(8)
-          .backgroundColor($r('app.color.bg_secondary'))
-          .borderRadius(CARD_RADIUS)
-          .margin({ bottom: CARD_GAP })
-
-          SubHeaderV2({
-            title: new SubHeaderV2Title({ primaryTitle: 'Search Scope' })
-          })
-          Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
-            Repeat(SCOPES)
-              .each((ri: RepeatItem<ScopeItem>) => {
-                ChipV2({
-                  chipV2Options: new ChipV2Options({
-                    label: new ChipV2Label({ text: ri.item.label }),
-                    size: ChipV2Size.SMALL,
-                    allowClose: false,
-                    activated: this.scopes.indexOf(ri.item.key) >= 0,
-                    onClicked: () => {
-                      if (this.scopes.indexOf(ri.item.key) >= 0) {
-                        this.scopes = this.scopes.filter((k: string) => k !== ri.item.key);
-                      } else {
-                        this.scopes = this.scopes.concat([ri.item.key]);
-                      }
-                      this.searchController.stopEditing();
-                      this.load(true);
-                    }
-                  })
-                })
-                  .margin(4)
-              })
-              .key((scope: ScopeItem) => scope.key)
-          }
-          .width('100%')
-          .padding(8)
-          .backgroundColor($r('app.color.bg_secondary'))
-          .borderRadius(CARD_RADIUS)
-          .margin({ bottom: CARD_GAP })
-
-          SubHeaderV2({
-            title: new SubHeaderV2Title({ primaryTitle: 'Language' })
-          })
-          // 单选 → 与上下卡片同宽同圆角（不用 `HdsListItemCard`：它自带 16 外缩，套在已有 16 的栅格里会变成 32）。
-          Row({ space: 8 }) {
-            Text('Only show')
-              .fontSize(14)
-              .fontColor($r('app.color.text_primary'))
-            Blank()
-            Select(langSelectOptions())
-              .selected(this.selectedLang.length > 0 ? SEARCH_LANGUAGES.indexOf(this.selectedLang) + 1 : 0)
-              .value(this.selectedLang.length > 0 ? this.selectedLang : LANG_ANY)
-              .font({ size: 14 })
-              .fontColor($r('sys.color.brand'))
-              .backgroundColor(Color.Transparent)
-              .onSelect((index: number) => {
-                const next: string = index === 0 ? '' : SEARCH_LANGUAGES[index - 1];
-                if (next === this.selectedLang) {
-                  return;
-                }
-                this.selectedLang = next;
-                this.searchController.stopEditing();
-                this.load(true);
-              })
-          }
-          .width('100%')
-          .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-          .backgroundColor($r('app.color.bg_secondary'))
-          .borderRadius(CARD_RADIUS)
-          .margin({ bottom: CARD_GAP })
-
-          if (this.activeRules.length > 0) {
-            SubHeaderV2({
-              title: new SubHeaderV2Title({ primaryTitle: 'Exclusions' })
-            })
-            Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
-              Repeat(this.activeRules)
-                .each((ri: RepeatItem<Filter>) => {
-                  ChipV2({
-                    chipV2Options: new ChipV2Options({
-                      label: new ChipV2Label({
-                        text: this.exclusionLabel(ri.item),
-                        activatedFontColor: ColorMetrics.resourceColor($r('app.color.danger'))
-                      }),
-                      size: ChipV2Size.SMALL,
-                      allowClose: false,
-                      // 未忽略 = 生效排除（danger 色调）；忽略 = 普通芯片。
-                      activated: this.ignoredExclusions.indexOf(this.exclusionKey(ri.item)) < 0,
-                      activatedBackgroundColor: ColorMetrics.resourceColor($r('app.color.chip_danger_bg')),
-                      onClicked: () => {
-                        const key: string = this.exclusionKey(ri.item);
-                        if (this.ignoredExclusions.indexOf(key) >= 0) {
-                          this.ignoredExclusions =
-                            this.ignoredExclusions.filter((k: string) => k !== key);
-                        } else {
-                          this.ignoredExclusions = this.ignoredExclusions.concat([key]);
-                        }
-                        this.searchController.stopEditing();
-                        this.load(true);
-                      }
-                    })
-                  })
-                    .margin(4)
-                })
-                .key((rule: Filter) => `${rule.id}`)
-            }
-            .width('100%')
-            .padding(8)
-            .backgroundColor($r('app.color.bg_secondary'))
-            .borderRadius(CARD_RADIUS)
-            .margin({ bottom: 4 })
-            Text('点一下可临时忽略这条规则（只影响本次搜索）')
-              .fontSize(11)
-              .fontColor($r('app.color.text_secondary'))
-              .width('100%')
-              .margin({ bottom: CARD_GAP })
-          }
-
-          SubHeaderV2({
-            title: new SubHeaderV2Title({ primaryTitle: 'Minimum Rating' })
-          })
-          Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
-            Repeat(STARS)
-              .each((ri: RepeatItem<number>) => {
-                ChipV2({
-                  chipV2Options: new ChipV2Options({
-                    label: new ChipV2Label({ text: `${ri.item}+` }),
-                    size: ChipV2Size.SMALL,
-                    allowClose: false,
-                    activated: this.minRating === ri.item,
-                    onClicked: () => {
-                      this.minRating = this.minRating === ri.item ? -1 : ri.item;
-                      this.searchController.stopEditing();
-                      this.load(true);
-                    }
-                  })
-                })
-                  .margin(4)
-              })
-              .key((star: number) => `${star}`)
-          }
-          .width('100%')
-          .padding(8)
-          .backgroundColor($r('app.color.bg_secondary'))
-          .borderRadius(CARD_RADIUS)
-          .margin({ bottom: CARD_GAP })
-
-          // 高级选项：默认折叠（低频）。展开后是 有种子 / 忽略站点过滤 / 页数区间。
-          SubHeaderV2({
-            title: new SubHeaderV2Title({ primaryTitle: 'Advanced' })
-          })
-          Row() {
-            Text('More options')
-              .fontSize(14)
-              .fontColor($r('app.color.text_primary'))
-            Blank()
-            SymbolGlyph($r(this.advancedExpanded ? 'sys.symbol.chevron_up' : 'sys.symbol.chevron_down'))
-              .fontSize(18)
-              .fontColor([$r('app.color.text_secondary')])
-              .padding(12)
-          }
-          .width('100%')
-          .padding({ left: 12, right: 12 })
-          .backgroundColor($r('app.color.bg_secondary'))
-          .borderRadius(CARD_RADIUS)
-          .margin({ bottom: CARD_GAP })
-          .alignItems(VerticalAlign.Center)
-          .onClick(() => {
-            this.advancedExpanded = !this.advancedExpanded;
-          })
-          if (this.advancedExpanded) {
-            Column({ space: 8 }) {
-              Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
-                ChipV2({
-                  chipV2Options: new ChipV2Options({
-                    label: new ChipV2Label({
-                      text: '有种子'
-                    }),
-                    size: ChipV2Size.SMALL,
-                    allowClose: false,
-                    activated: this.onlyTorrents,
-                    onClicked: () => {
-                      this.onlyTorrents = !this.onlyTorrents;
-                      this.searchController.stopEditing();
-                      this.load(true);
-                    }
-                  })
-                })
-                  .margin(4)
-                ChipV2({
-                  chipV2Options: new ChipV2Options({
-                    label: new ChipV2Label({
-                      text: '忽略站点过滤'
-                    }),
-                    size: ChipV2Size.SMALL,
-                    allowClose: false,
-                    activated: this.ignoreFilters,
-                    onClicked: () => {
-                      this.ignoreFilters = !this.ignoreFilters;
-                      this.searchController.stopEditing();
-                      this.load(true);
-                    }
-                  })
-                })
-                  .margin(4)
               }
-              .width('100%')
-              Row({ space: 8 }) {
-                Text('页数')
-                  .fontSize(12)
-                  .fontColor($r('app.color.text_secondary'))
-                TextInput({ text: this.pageFromText, placeholder: '从' })
-                  .type(InputType.Number)
-                  .layoutWeight(1)
-                  .height(36)
-                  .onChange((value: string) => { this.pageFromText = value; })
-                  .onSubmit(() => { this.load(true); })
-                Text('–')
-                  .fontSize(12)
-                  .fontColor($r('app.color.text_secondary'))
-                TextInput({ text: this.pageToText, placeholder: '到' })
-                  .type(InputType.Number)
-                  .layoutWeight(1)
-                  .height(36)
-                  .onChange((value: string) => { this.pageToText = value; })
-                  .onSubmit(() => { this.load(true); })
-              }
-              .width('100%')
-              Text('页数区间过窄（如 1000 到 10）会返回 0 条；留空 = 不限。')
-                .fontSize(11)
-                .fontColor($r('app.color.text_secondary'))
-                .width('100%')
-            }
-            .width('100%')
-            .padding(8)
-            .backgroundColor($r('app.color.bg_secondary'))
-            .borderRadius(CARD_RADIUS)
-            .margin({ bottom: CARD_GAP })
-          }
-                }
-                .width('100%')
-                .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
-                // 官方转场：展开/收起同时淡入淡出（与 animateTo 配合，非自绘）。
-                .transition(TransitionEffect.OPACITY.animation({ duration: 200, curve: Curve.EaseInOut }))
-              }
+              // 官方转场：展开/收起同时淡入淡出（与 animateTo 配合，非自绘）。
+              .transition(TransitionEffect.OPACITY.animation({ duration: 200, curve: Curve.EaseInOut }))
             }
 
             LazyForEach(this.dataSource, (item: GalleryRowItem) => {
@@ -1118,13 +1023,9 @@ export struct SearchPage {
             if (this.message.length > 0) {
               ListItem() {
                 Row({ space: 8 }) {
-                  if (this.message.endsWith('…')) {
-                    LoadingProgress().width(32).height(32)
-                  } else {
-                    Text(this.message)
-                      .fontSize(12)
-                      .fontColor($r('app.color.text_secondary'))
-                  }
+                  Text(this.message)
+                    .fontSize(12)
+                    .fontColor($r('app.color.text_secondary'))
                 }
                 .width('100%')
                 .justifyContent(FlexAlign.Center)
@@ -1144,7 +1045,7 @@ export struct SearchPage {
           .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
           // 上滑即收起联想：整块搜索区（含输入框）会随标题栏一起隐藏，面板留着就成了无主浮层。
           .onScrollStart(() => {
-            this.closeSuggestions();
+            this.closePanels();
           })
         }
         .onRefreshing(() => { this.searchController.stopEditing(); this.load(true); })
@@ -1157,19 +1058,37 @@ export struct SearchPage {
         RefreshSpinner({
           pullOffset: this.pullOffset,
           isRefreshing: this.isRefreshing,
+          // 程序化搜索（回车 / 「应用」/ 点 chip）也要有反馈：列表已有结果时
+          // 底部那个转圈在屏幕外，等于没有加载动画。
+          busy: this.busy,
           top: this.contentTop + this.chipsHeight + 4
         })
-        // 中文联想面板：同一 `Stack` 内、chips 之下，只占自身高度（不铺满 → 不吞下层手势，#21）。
+        // 覆盖层（最近搜索 / 中文联想）：同一 `Stack` 内、chips 之下，只占自身高度（不铺满 → 不吞下层手势，#21）。
         // **不能**塞进标题栏 `bottomBuilder`：那里的高度是固定的 `headerHeight`，同时喂给 `contentTop`
         // 与刷新圈位置，撑大它会一次算错三处布局（#38 / #51）。
-        if (this.suggestionsOpen) {
+        if (this.panelKind !== PANEL_NONE) {
           Column() {
-            TagSuggestionPanel({
-              items: this.suggestions,
-              onPick: (ns: string, tag: string) => {
-                this.pickSuggestion(ns, tag);
-              }
-            })
+            if (this.panelKind === PANEL_HISTORY) {
+              SearchHistoryPanel({
+                items: this.history,
+                onRun: (item: QuickSearch) => {
+                  this.runHistory(item);
+                },
+                onDelete: (item: QuickSearch) => {
+                  this.deleteHistory(item);
+                },
+                onClear: () => {
+                  this.clearHistory();
+                }
+              })
+            } else {
+              TagSuggestionPanel({
+                items: this.suggestions,
+                onPick: (ns: string, tag: string) => {
+                  this.pickSuggestion(ns, tag);
+                }
+              })
+            }
           }
           .width('100%')
           .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
@@ -1193,15 +1112,22 @@ export struct SearchPage {
         bottomBuilder: { builder: () => { this.headerArea() }, height: this.headerHeight }
       }
     })
-    // 上滑收起标题 + 搜索功能区（含收起态摘要），下滑复原：结果页只留内容。
+    // 上滑收起标题 + 搜索功能区（含摘要），下滑复原：结果页只留内容。
     .bindToScrollable([this.listScroller])
     .dynamicHideTitleBar({ hideTitleArea: true, hideBottomBuilder: true, mode: HideMode.SCROLL_UP })
-    .bindSheet($$this.showQuickSearch, this.quickSearchSheet(), {
+    // 半模态只承载「快速搜索」（筛选已回到页面内联，同一节点也只能挂一个，#45）。
+    .bindSheet($$this.showSheet, this.sheetContent(), {
       title: { title: '快速搜索' },
       // 内容是 List（无固有高度，`FIT_CONTENT` 量不出来）：半屏起步，可上拖到全屏。
       detents: [SheetSize.MEDIUM, SheetSize.LARGE],
+      onDisappear: () => {
+        // 下滑 / 点遮罩关闭也要把开关复位，否则下次点开时状态是脏的。
+        this.showSheet = false;
+      }
     })
     .onAppear(() => {
+      // 历史与屏蔽规则都只在进页/落库后读一次；历史为空时浮层根本不会出现。
+      this.reloadHistory();
       if (this.kind === 'keyword') {
         this.reloadRules();
       }

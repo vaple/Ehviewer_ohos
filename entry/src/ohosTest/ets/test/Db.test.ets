@@ -18,7 +18,7 @@ export default function dbTest() {
 
       const qs: QuickSearch = {
         id: 0, category: 0, keyword: 'kw1', language: '',
-        advanceSearch: 0, minRating: 0, time: 123
+        advanceSearch: 0, minRating: 0, time: 123, saved: 1
       };
       const rowId: number = await QuickSearchDao.insert(qs);
       expect(rowId > 0).assertTrue();

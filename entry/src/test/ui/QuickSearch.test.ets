@@ -1,5 +1,5 @@
 import { describe, it, expect } from '@ohos/hypium';
-import { hasSavedKeyword, quickSearchToParam, quickSearchSummary } from '../../main/ets/search/QuickSearchQuery';
+import { hasSavedKeyword, historyIdsToPrune, quickSearchToParam, quickSearchSummary, sameSearch } from '../../main/ets/search/QuickSearchQuery';
 import { QuickSearch } from '../../main/ets/model/QuickSearch';
 import { ALL_CATS } from '../../main/ets/search/SearchQuery';
 import { joinQueryText, splitQueryTokens } from '../../main/ets/search/QuerySegments';
@@ -7,7 +7,7 @@ import { joinQueryText, splitQueryTokens } from '../../main/ets/search/QuerySegm
 function row(keyword: string): QuickSearch {
   return {
     id: 1, category: 0, keyword: keyword, language: '',
-    advanceSearch: 0, minRating: -1, time: 0
+    advanceSearch: 0, minRating: -1, time: 0, saved: 1
   };
 }
 
@@ -22,7 +22,7 @@ export default function quickSearchTest() {
     it('quickSearchToParam_restores_conditions', 0, () => {
       const rec: QuickSearch = {
         id: 1, category: 0x2, keyword: 'nico', language: '',
-        advanceSearch: 3, minRating: 4, time: 0
+        advanceSearch: 3, minRating: 4, time: 0, saved: 1
       };
       const param = quickSearchToParam(rec);
       expect(param.query).assertEqual('nico');
@@ -36,7 +36,7 @@ export default function quickSearchTest() {
     it('quickSearchSummary_describes_conditions', 0, () => {
       const rec: QuickSearch = {
         id: 1, category: 0x2, keyword: 'nico', language: '',
-        advanceSearch: 3, minRating: 4, time: 0
+        advanceSearch: 3, minRating: 4, time: 0, saved: 1
       };
       expect(quickSearchSummary(rec)).assertEqual('排除 DOUJINSHI · title/tags · ★4+');
     });
@@ -48,7 +48,7 @@ export default function quickSearchTest() {
     it('quickSearch_round_trips_language', 0, () => {
       const rec: QuickSearch = {
         id: 1, category: 0, keyword: 'lang', language: 'chinese',
-        advanceSearch: 0, minRating: -1, time: 0
+        advanceSearch: 0, minRating: -1, time: 0, saved: 1
       };
       expect(quickSearchToParam(rec).language).assertEqual('chinese');
       expect(quickSearchSummary(rec)).assertEqual('chinese');
@@ -71,7 +71,7 @@ export default function quickSearchTest() {
       expect(keyword).assertEqual('character:"sparkle$" -female:"big breasts$"');
       const rec: QuickSearch = {
         id: 1, category: 0, keyword: keyword, language: 'chinese',
-        advanceSearch: 0, minRating: -1, time: 0
+        advanceSearch: 0, minRating: -1, time: 0, saved: 1
       };
       const param = quickSearchToParam(rec);
       expect(param.query).assertEqual(keyword);
@@ -85,12 +85,48 @@ export default function quickSearchTest() {
     it('quickSearch_round_trips_language_and_rating', 0, () => {
       const rec: QuickSearch = {
         id: 1, category: 0, keyword: 'character:"sparkle$"', language: 'chinese',
-        advanceSearch: 0, minRating: 4, time: 0
+        advanceSearch: 0, minRating: 4, time: 0, saved: 1
       };
       const param = quickSearchToParam(rec);
       expect(param.query).assertEqual('character:"sparkle$"');
       expect(param.language).assertEqual('chinese');
       expect(param.minRating).assertEqual(4);
+    });
+
+    // —— 搜索历史（与快搜同表，靠 `saved` 区分）——
+
+    it('sameSearch_ignores_case_and_time', 0, () => {
+      const a: QuickSearch = row('Female:"Big Breasts$"');
+      const b: QuickSearch = row('female:"big breasts$"');
+      b.id = 9;
+      b.time = 1234;
+      expect(sameSearch(a, b)).assertTrue();
+    });
+
+    it('sameSearch_separates_different_conditions', 0, () => {
+      const a: QuickSearch = row('nico');
+      const b: QuickSearch = row('nico');
+      b.minRating = 4;
+      expect(sameSearch(a, b)).assertFalse();
+      const c: QuickSearch = row('nico');
+      c.category = 0x2;
+      expect(sameSearch(a, c)).assertFalse();
+      const d: QuickSearch = row('nico');
+      d.language = 'chinese';
+      expect(sameSearch(a, d)).assertFalse();
+    });
+
+    it('historyIdsToPrune_keeps_newest', 0, () => {
+      const rows: QuickSearch[] = [];
+      for (let i = 0; i < 5; i++) {
+        const r: QuickSearch = row(`k${i}`);
+        r.id = i + 1;
+        rows.push(r);
+      }
+      expect(historyIdsToPrune(rows, 3).length).assertEqual(2);
+      expect(historyIdsToPrune(rows, 3)[0]).assertEqual(4);
+      expect(historyIdsToPrune(rows, 10).length).assertEqual(0);
+      expect(historyIdsToPrune(rows, 0).length).assertEqual(0);
     });
   });
 }

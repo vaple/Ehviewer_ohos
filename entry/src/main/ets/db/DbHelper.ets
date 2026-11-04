@@ -19,7 +19,7 @@ const CREATE_STATEMENTS: string[] = [
   'CREATE TABLE IF NOT EXISTS QUICK_SEARCH (' +
     '_id INTEGER PRIMARY KEY AUTOINCREMENT, CATEGORY INTEGER NOT NULL, ' +
     'KEYWORD TEXT, LANGUAGE TEXT, ADVANCE_SEARCH INTEGER NOT NULL, MIN_RATING INTEGER NOT NULL, ' +
-    'TIME INTEGER NOT NULL)',
+    'TIME INTEGER NOT NULL, SAVED INTEGER NOT NULL DEFAULT 1)',
 
   'CREATE TABLE IF NOT EXISTS FILTER (' +
     '_id INTEGER PRIMARY KEY AUTOINCREMENT, TEXT TEXT, ENABLE INTEGER)',
@@ -71,12 +71,20 @@ const STEPS: MigrationStep[] = [
       // 历史页一直写死 `pages: 0`（列都不存在），补上后列表才会显示页数。
       'ALTER TABLE HISTORY ADD COLUMN PAGES INTEGER NOT NULL DEFAULT 0'
     ]
+  },
+  {
+    // v7 → v8：快搜与搜索历史共用一张表，用 `SAVED` 区分。
+    // 老行全部是手动保存的快搜 → 默认 1，升级后历史列表自然为空，不会把快搜混进历史。
+    from: 7,
+    sql: [
+      'ALTER TABLE QUICK_SEARCH ADD COLUMN SAVED INTEGER NOT NULL DEFAULT 1'
+    ]
   }
 ];
 
 /** RDB（`@ohos.data.relationalStore`）初始化、建表与版本骨架。 */
 export class DbHelper {
-  static readonly DB_VERSION: number = 7;
+  static readonly DB_VERSION: number = 8;
 
   private static store: relationalStore.RdbStore | undefined = undefined;
 
