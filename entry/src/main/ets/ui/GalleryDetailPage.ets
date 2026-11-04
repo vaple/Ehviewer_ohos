@@ -49,7 +49,6 @@ import { DownloadDao } from '../db/dao/DownloadDao';
 import { QuotaLine } from './QuotaLine';
 import { PreviewCell } from '../model/PreviewCell';
 import { chunkOfPage } from '../common/JumpStrip';
-import { shouldLoadAtSpeed, screensPerSecond, SPEED_SAMPLE_MS } from '../common/PreviewLoadPolicy';
 import { JumpSheet } from './JumpSheet';
 import { NsLabel, TagChip } from './TagChip';
 import { TagDb } from '../tagdb/TagDb';
@@ -117,16 +116,11 @@ export struct GalleryDetailPage {
   private chunkInflight: Set<number> = new Set<number>();
   /** 失败块的冷却起点（ms）：取块失败后按 `CHUNK_RETRY_MS` 限流，避免一次网络抖动打成请求风暴。 */
   private chunkFailedAt: Map<number, number> = new Map<number, number>();
-  /** 最近一次上报的可视行（速度采样 / 停稳取块都用它）。 */
+  /** 最近一次上报的可视行（取块与停稳兜底都用它）。 */
   private visibleRowStart: number = -1;
   private visibleRowEnd: number = -1;
   /** 停稳取块的定时器（`-1` = 没有待触发的）。 */
   private settleTimer: number = -1;
-  /** 视口高度（vp，`List.onAreaChange` 读；速度按「屏/秒」归一化要用）。 */
-  private viewportH: number = 0;
-  /** 速度采样窗起点（`0` = 下一拍重新取样；`onScrollStart` 重置）。 */
-  private speedSampleAt: number = 0;
-  private speedSampleOffset: number = 0;
   private spriteCache: PreviewSpriteCache = new PreviewSpriteCache();
   private spriteClient: EhClient | undefined = undefined;
   private spriteGid: number = -1;
@@ -511,37 +505,6 @@ export struct GalleryDetailPage {
     })();
   }
 
-  /**
-   * 速度采样：每 `SPEED_SAMPLE_MS` 算一次「屏/秒」，只有不快于门限时才取块。
-   *
-   * 为什么判据是「屏/秒」：一行在视口里的停留时长 `T = 1 / (屏/秒)`，与屏高、行高都无关；
-   * 同一个「行/秒」在 9 行屏和 18 行折叠屏上，用户感知的速度差一倍
-   * （见 `common/PreviewLoadPolicy`）。所以快甩自动不取、慢拖与慢惯性自动取，
-   * 不需要再单独判 `ScrollState.Fling`（慢 fling 的行确实停留够久，该取）。
-   */
-  private sampleSpeed(offsetVp: number): void {
-    const now: number = Date.now();
-    if (this.speedSampleAt === 0) {
-      this.speedSampleAt = now;
-      this.speedSampleOffset = offsetVp;
-      return;
-    }
-    const dt: number = now - this.speedSampleAt;
-    if (dt < SPEED_SAMPLE_MS) {
-      return;
-    }
-    const dy: number = offsetVp - this.speedSampleOffset;
-    this.speedSampleAt = now;
-    this.speedSampleOffset = offsetVp;
-    if (this.viewportH <= 0) {
-      return;
-    }
-    if (!shouldLoadAtSpeed(screensPerSecond(dy, this.viewportH, dt))) {
-      return;
-    }
-    this.requestRows(this.visibleRowStart, this.visibleRowEnd + 1);
-  }
-
   /** 取消待触发的停稳取块（新一轮滑动开始 / 换画廊 / 离开页面）。 */
   private cancelSettle(): void {
     if (this.settleTimer >= 0) {
@@ -551,7 +514,7 @@ export struct GalleryDetailPage {
   }
 
   /**
-   * 停稳兜底：速度门限已经处理「慢拖 / 慢惯性」，这里保证「抬手即停」也有一次最终测量，
+   * 停稳兜底：滚动中已经按可视窗取过，这里保证「抬手即停」再补一次，
    * 同时兜住失败块的重试（冷却已过的块才会重发）。
    */
   private scheduleSettle(): void {
@@ -564,8 +527,8 @@ export struct GalleryDetailPage {
 
   /**
    * 取这些预览行覆盖的块（尾部再往后多取 `PREFETCH_PAGES` 页 ≈ 一个站点块，跨块不空窗）。
-   * 行→块用 `chunkOfPage`：甩动/跳页直达时中间没看过的块不该发请求；同块并发由 `previewChunk` 合并。
-   * 调用点只有速度采样与停稳兜底，滑动过程中的每一帧都不会发请求。
+   * 行→块用 `chunkOfPage`；同块由 `chunkCells` / `chunkInflight` 去重。
+   * 调用点：`onScrollIndex`（可视窗一变就取，可见优先）与停稳兜底（重试/补漏）。
    */
   private requestRows(firstRow: number, lastRow: number): void {
     if (this.data === null || this.previewPages <= 0) {
@@ -1126,7 +1089,7 @@ export struct GalleryDetailPage {
   }
 
   /**
-   * 一行预览（3 格等宽）。格子自己从「页码占位」切成真图；取块由停稳事件驱动，不在滑动中发请求。
+   * 一行预览（3 格等宽）。格子自己从「页码占位」切成真图；取块由 `onScrollIndex` 的可视窗驱动。
    * 行数固定（`gridSource`），所以滚动范围稳定，未取到的页只是灰格，不会把列表越滚越长。
    */
   @Builder
@@ -1410,28 +1373,23 @@ export struct GalleryDetailPage {
       .height('100%')
       .backgroundColor($r('app.color.bg_primary'))
       .cachedCount(4)
-      .onAreaChange((_oldArea: Area, newArea: Area) => {
-        // 视口高度（vp）：速度按「屏/秒」归一化用，旋转/折叠展开后自动跟随。
-        this.viewportH = Number.parseFloat(newArea.height.toString());
-      })
       .onScrollIndex((start: number, end: number) => {
         // List 第 0 项是头部、最后一项是尾项 → 预览行索引 = item 索引 - 1。
-        // 这里只记可视窗：是否取块由 `sampleSpeed`（屏/秒）与停稳兜底决定。
+        // 可视窗一变就取（可见优先）：块按 20 页去重，所以一次长滑 = 每跨一块 1 条请求。
         this.visibleRowStart = start - 1;
         this.visibleRowEnd = end - 1;
+        this.requestRows(this.visibleRowStart, this.visibleRowEnd + 1);
       })
       .onScrollStart(() => {
-        // 新手势开始：上一轮还没触发的停稳取块作废；速度从这一拍重新取样。
+        // 新手势开始：上一轮还没触发的停稳取块作废。
         this.cancelSettle();
-        this.speedSampleAt = 0;
       })
       .onScrollStop(() => {
+        // 停稳兜底：按最终可视窗再补一次（也负责失败块重试）。
         this.scheduleSettle();
       })
       .onDidScroll(() => {
-        const y: number = this.scroller.currentOffset().yOffset;
-        this.refreshBar(y);
-        this.sampleSpeed(y);
+        this.refreshBar(this.scroller.currentOffset().yOffset);
       })
       // 底部动作条：官方 `HdsActionBar`（背板 + 主按钮 + 跳页），主按钮用自定义 builder 承载页码。
       if (this.pages > 0) {

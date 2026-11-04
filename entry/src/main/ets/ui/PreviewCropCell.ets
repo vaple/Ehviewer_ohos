@@ -6,6 +6,9 @@ import { PreviewSpriteCache } from '../service/PreviewSpriteCache';
  * 预览裁剪格（`PreviewSpriteCache` 给成品小图，`Image(PixelMap)` 直显）。
  * `load` 由父注入；就绪才挂 `Image`（`PixelMap` 换实例才刷新，沿官方约束）。
  * 失败灰占位（记日志，不抛）。
+ *
+ * 加载策略：**可视优先**——格子一挂载（可视 / `cachedCount` 预建行）就取图，
+ * 不做速度门控（用户 2026-11-04 决定；快速滑过时多取的那点图会进磁盘缓存）。
  */
 @ComponentV2
 export struct PreviewCropCell {
