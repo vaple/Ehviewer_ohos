@@ -20,6 +20,12 @@ interface CropEntry {
  */
 export class PreviewSpriteCache {
   private static crops: Map<string, CropEntry> = new Map<string, CropEntry>();
+   /**
+   * 同一裁剪键的在飞解码/裁剪（跨实例共享）。
+   * 一个站点块的格子常常同时挂载，`acquire` 会在同一 tick 里进很多次；不合并就会
+   * 对同一张精灵图重复 `createPixelMap` + `crop`（重复下载已由 `ImageStore` 合并）。
+   */
+  private static inflight: Map<string, Promise<image.PixelMap>> = new Map<string, Promise<image.PixelMap>>();
   private store: ImageStore | undefined = undefined;
 
   /** 缓存键（cell 与页面共用，保证 `acquire/release` 同键）。 */
@@ -44,6 +50,36 @@ export class PreviewSpriteCache {
       hit.refs += 1;
       return hit.pm;
     }
+    const running: Promise<image.PixelMap> | undefined = PreviewSpriteCache.inflight.get(key);
+    if (running !== undefined) {
+      // 等待者和创建者共用同一份成品；成品入库后按命中 +1。
+      return running.then((shared: image.PixelMap): image.PixelMap => {
+        const entry: CropEntry | undefined = PreviewSpriteCache.crops.get(key);
+        if (entry !== undefined) {
+          entry.refs += 1;
+          return entry.pm;
+        }
+        PreviewSpriteCache.crops.set(key, { pm: shared, refs: 1 });
+        return shared;
+      });
+    }
+    const task: Promise<image.PixelMap> = this.decode(context, client, referer, url, x, y, w, h);
+    PreviewSpriteCache.inflight.set(key, task);
+    try {
+      const pm: image.PixelMap = await task;
+      PreviewSpriteCache.evict();
+      PreviewSpriteCache.crops.set(key, { pm: pm, refs: 1 });
+      return pm;
+    } finally {
+      if (PreviewSpriteCache.inflight.get(key) === task) {
+        PreviewSpriteCache.inflight.delete(key);
+      }
+    }
+  }
+
+  /** 下载精灵图（`ImageStore` 负责去重）+ 解码 + 裁剪；**不碰缓存**，由 `acquire` 统一入库。 */
+  private async decode(context: common.Context, client: EhClient, referer: string,
+    url: string, x: number, y: number, w: number, h: number): Promise<image.PixelMap> {
     if (this.store === undefined) {
       this.store = new ImageStore();
       await this.store.init(context);
@@ -54,8 +90,6 @@ export class PreviewSpriteCache {
       const source: image.ImageSource = image.createImageSource(file.fd);
       const pm: image.PixelMap = await source.createPixelMap();
       await pm.crop({ size: { width: w, height: h }, x: x, y: y });
-      PreviewSpriteCache.evict();
-      PreviewSpriteCache.crops.set(key, { pm: pm, refs: 1 });
       return pm;
     } finally {
       fs.closeSync(file);

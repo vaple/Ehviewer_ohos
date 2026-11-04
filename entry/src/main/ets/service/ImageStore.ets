@@ -15,6 +15,14 @@ import { EhClient } from '../network/EhClient';
 export class ImageStore {
   private dir: string = '';
   private ready: boolean = false;
+  /**
+   * 同 URL 的在飞下载（模块级，跨实例共享）。
+   *
+   * 详情预览里一个站点块（20 页）的所有格共用**同一张**精灵图：块数据一到，
+   * 当前可见的 9–12 个格子会同时 `getPath`，而磁盘上还没这个文件。不合并的话
+   * 同一张图会被并发下载 N 次（真机实测：落点出图被这些重复下载拖慢）。
+   */
+  private static inflight: Map<string, Promise<string>> = new Map<string, Promise<string>>();
 
   async init(context: common.Context): Promise<void> {
     if (this.ready) {
@@ -38,16 +46,37 @@ export class ImageStore {
     return await this.pathFor(client, url, referer);
   }
 
-  private async pathFor(client: EhClient, url: string, referer: string): Promise<string> {
+  private pathFor(client: EhClient, url: string, referer: string): Promise<string> {
     const path: string = `${this.dir}/${ImageStore.nameOf(url)}`;
-    if (!fs.accessSync(path)) {
-      const bytes: ArrayBuffer = await client.getImageBytes(url, referer);
-      const file = fs.openSync(path, fs.OpenMode.CREATE | fs.OpenMode.READ_WRITE | fs.OpenMode.TRUNC);
-      try {
-        fs.writeSync(file.fd, bytes);
-      } finally {
-        fs.closeSync(file);
+    if (fs.accessSync(path)) {
+      return Promise.resolve(path);
+    }
+    const running: Promise<string> | undefined = ImageStore.inflight.get(path);
+    if (running !== undefined) {
+      return running;
+    }
+    const task: Promise<string> = this.download(client, url, referer, path);
+    ImageStore.inflight.set(path, task);
+    task.then(() => {
+      if (ImageStore.inflight.get(path) === task) {
+        ImageStore.inflight.delete(path);
       }
+    }).catch((_e: object) => {
+      // 失败必须摘掉：否则一次网络抖动会让这个 URL 永远拿到 rejected promise。
+      if (ImageStore.inflight.get(path) === task) {
+        ImageStore.inflight.delete(path);
+      }
+    });
+    return task;
+  }
+
+  private async download(client: EhClient, url: string, referer: string, path: string): Promise<string> {
+    const bytes: ArrayBuffer = await client.getImageBytes(url, referer);
+    const file = fs.openSync(path, fs.OpenMode.CREATE | fs.OpenMode.READ_WRITE | fs.OpenMode.TRUNC);
+    try {
+      fs.writeSync(file.fd, bytes);
+    } finally {
+      fs.closeSync(file);
     }
     return path;
   }
