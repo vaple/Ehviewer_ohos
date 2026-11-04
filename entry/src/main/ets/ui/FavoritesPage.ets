@@ -16,7 +16,7 @@ import { GalleryListPage } from '../parser/GalleryListParser';
 import { GalleryRowItem, loadMissingThumbs, rowLine1, rowLine2, toDetailPreview } from './GalleryRow';
 import { catLabel } from './CategoryStyle';
 import { FavCatSheet, FavCatOption } from './FavCatSheet';
-import { PAGE_PADDING, TOUCH_MIN } from './Materials';
+import { PAGE_PADDING, TOUCH_MIN, sheetBackdrop } from './Materials';
 import { navTitleBarStyle, TITLE_BAR_H } from './NavStyle';
 
 /**
@@ -584,6 +584,9 @@ export struct FavoritesPage {
         title: { title: '移动到收藏夹' },
         // 内容是 List（无固有高度，`FIT_CONTENT` 量不出来）：半屏起步，可上拖到全屏。
         detents: [SheetSize.MEDIUM, SheetSize.LARGE],
+        // 半模态材质必须组件级设置（应用级开关不覆盖 `bindSheet`，见 `Materials.ets`）。
+        backgroundColor: sheetBackdrop().backgroundColor,
+        systemMaterial: sheetBackdrop().material,
         onDisappear: () => {
           this.moveGid = -1;
           this.moveToken = '';

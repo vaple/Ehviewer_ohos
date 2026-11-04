@@ -38,7 +38,7 @@ import { CATEGORY_UNKNOWN, languageOf } from '../parser/ParserUtils';
 import { tagQueryOf, GalleryDetailParser } from '../parser/GalleryDetailParser';
 import { errorText } from '../common/ErrorText';
 import { catColor, catLabel } from './CategoryStyle';
-import { CARD_RADIUS, ACTION_BAR_BTN_H, ACTION_BAR_H, ACTION_BAR_MARGIN, HDS_MATERIAL, JUMP_SHEET_H, PAGE_PADDING, THUMB_RADIUS, TOUCH_MIN, commentScoreColor } from './Materials';
+import { CARD_RADIUS, ACTION_BAR_BTN_H, ACTION_BAR_H, ACTION_BAR_MARGIN, HDS_MATERIAL, JUMP_SHEET_H, PAGE_PADDING, THUMB_RADIUS, TOUCH_MIN, commentScoreColor, sheetBackdrop } from './Materials';
 import { commentDateText, commentScoreText } from '../common/CommentText';
 import { galleryGeometryId } from './GalleryRow';
 import { SkeletonBlock } from './Skeleton';
@@ -1481,7 +1481,9 @@ export struct GalleryDetailPage {
         detents: this.sheetKind === 3
           ? [JUMP_SHEET_H]
           : [SheetSize.MEDIUM, SheetSize.LARGE],
-        // 半模态材质由全局开关（module.json5）提供，这里不再重复设置。
+        // 半模态材质必须组件级设置（应用级开关不覆盖 `bindSheet`，见 `Materials.ets`）。
+        backgroundColor: sheetBackdrop().backgroundColor,
+        systemMaterial: sheetBackdrop().material,
         onDisappear: () => {
           this.showSheet = false;
           // 跳页选中后在这里进阅读器：等半模态退场，别和页面转场抢同一帧。

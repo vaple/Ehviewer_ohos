@@ -14,7 +14,7 @@ import { SearchPage } from './SearchPage';
 import { ReaderPage } from './ReaderPage';
 import { SettingsPage } from './SettingsPage';
 import { DownloadsPage } from './DownloadsPage';
-import { HDS_MATERIAL, PAGE_PADDING } from './Materials';
+import { HDS_MATERIAL, PAGE_PADDING, sheetBackdrop } from './Materials';
 import { RANK_CHIPS_H, TITLE_BAR_H } from './NavStyle';
 import { RANK_RANGES, RankState } from '../state/RankState';
 import { SessionState } from '../state/SessionState';
@@ -485,6 +485,9 @@ export struct AppShell {
     .bindSheet($$this.updatePromptOpen, this.updatePromptSheet(), {
       title: { title: `发现新版本 ${this.promptVersion}` },
       height: SheetSize.MEDIUM,
+      // 半模态材质必须组件级设置（应用级开关不覆盖 `bindSheet`，见 `Materials.ets`）。
+      backgroundColor: sheetBackdrop().backgroundColor,
+      systemMaterial: sheetBackdrop().material,
       onDisappear: () => {
         this.updatePromptOpen = false;
       }

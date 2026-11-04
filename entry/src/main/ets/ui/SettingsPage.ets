@@ -14,7 +14,7 @@ import { SessionState } from '../state/SessionState';
 import { WindowState } from '../state/WindowState';
 import { DownloadSettings, downloadSettings, clampConcurrency } from '../state/DownloadSettings';
 import { HdsListItemCard, HdsNavDestination, PrefixIcon, SuffixArrow, SuffixBadge, SuffixButton, SuffixSelect, SuffixSwitch } from '@kit.UIDesignKit';
-import { CARD_GAP, CARD_RADIUS, PAGE_PADDING } from './Materials';
+import { CARD_GAP, CARD_RADIUS, PAGE_PADDING, sheetBackdrop } from './Materials';
 import { TITLE_BAR_H } from './NavStyle';
 import { BundleStorage, CacheManager } from '../service/CacheManager';
 import { formatBytes } from '../common/Bytes';
@@ -1075,6 +1075,9 @@ export struct SettingsPage {
       title: { title: this.sheetTitle() },
       // 存储明细只有四行 + 两个按钮：按内容高度贴合；另外两张沿用默认两档（内容更高，能拉大）。
       detents: this.sheetKind === 3 ? [SheetSize.FIT_CONTENT] : [SheetSize.MEDIUM, SheetSize.LARGE],
+      // 半模态材质必须组件级设置（应用级开关不覆盖 `bindSheet`，见 `Materials.ets`）。
+      backgroundColor: sheetBackdrop().backgroundColor,
+      systemMaterial: sheetBackdrop().material,
       onDisappear: () => {
         this.sheetOpen = false;
       }

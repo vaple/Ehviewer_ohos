@@ -31,7 +31,7 @@ import { QuickSearchSheet } from './QuickSearchSheet';
 import { FilterPanel } from './FilterPanel';
 import { SearchHistoryPanel } from './SearchHistoryPanel';
 import { SCOPES, scopeShort } from '../search/FilterCatalog';
-import { CARD_GAP, PAGE_PADDING, TOUCH_MIN } from './Materials';
+import { CARD_GAP, PAGE_PADDING, TOUCH_MIN, sheetBackdrop } from './Materials';
 import { navTitleBarStyle, TITLE_BAR_H } from './NavStyle';
 import { RefreshSpinner } from './RefreshSpinner';
 
@@ -1120,6 +1120,9 @@ export struct SearchPage {
       title: { title: '快速搜索' },
       // 内容是 List（无固有高度，`FIT_CONTENT` 量不出来）：半屏起步，可上拖到全屏。
       detents: [SheetSize.MEDIUM, SheetSize.LARGE],
+      // 半模态材质必须组件级设置（应用级开关不覆盖 `bindSheet`，见 `Materials.ets`）。
+      backgroundColor: sheetBackdrop().backgroundColor,
+      systemMaterial: sheetBackdrop().material,
       onDisappear: () => {
         // 下滑 / 点遮罩关闭也要把开关复位，否则下次点开时状态是脏的。
         this.showSheet = false;

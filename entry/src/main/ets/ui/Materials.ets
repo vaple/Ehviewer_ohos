@@ -1,3 +1,4 @@
+import { uiMaterial } from '@kit.ArkUI';
 import { hdsMaterial, SystemMaterialParams } from '@kit.UIDesignKit';
 import { Logger } from '../common/Logger';
 
@@ -6,7 +7,8 @@ import { Logger } from '../common/Logger';
  *
  * 约定：
  * - 材质默认值只由 `module.json5` 的 `ohos.arkui.UIMaterial.state=enable` 决定
- *   （Chip / Select / SegmentButton / Toast / 半模态等默认吃系统材质），新增页面不要重复写组件级材质；
+ *   （Chip / Select / SegmentButton / Toast 等默认吃系统材质），新增页面不要重复写组件级材质；
+ *   **半模态是例外**：应用级开关不会为 `bindSheet` 开材质，必须显式给 `SHEET_MATERIAL`；
  * - HDS 组件走 `hdsMaterial.SystemMaterialParams`（`systemMaterialEffect`）；**普通组件**的
  *   `uiMaterial.ImmersiveMaterial`（`.systemMaterial()`）只在 NavDestination 标题栏和 End 位横向 Tabs
  *   底栏生效，内容区自定义容器（评论输入条/提示气泡）设了不渲染——那块只能用 `backgroundBlurStyle`；
@@ -43,10 +45,50 @@ Logger.info('Materials', `hds material level=${HDS_MATERIAL.materialLevel} (IMME
 // 那些令牌不透明，叠上去会把模糊整块盖成实心。
 
 /**
- * Sheet / 浮层材质由 `module.json5` 的全局开关（`ohos.arkui.UIMaterial.state=enable`）提供。
- *
- * **普通组件（Row/Column 等）的 `systemMaterial` 只在 `Navigation/NavDestination` 标题栏和
- * `barPosition=BarPosition.End` 的横向 Tabs 底栏生效**（官方《开启沉浸光感》明确列出），
+ * 半模态（`bindSheet`）材质。**必须在 `SheetOptions` 里显式设置**：官方《组件适配沉浸光感》
+ * 写明 `bindSheet` 仅支持组件级开启，应用级开关（`module.json5`）**不会**为半模态默认开材质，
+ * `systemMaterial` 默认 undefined 就是一块不透明承托面（与设备算力无关）。
+ * 弹窗类浮层用最厚档：内容与背景之间需要清晰的分离。
+ */
+export const SHEET_MATERIAL: uiMaterial.Material = new uiMaterial.ImmersiveMaterial({
+  style: uiMaterial.ImmersiveStyle.ULTRA_THICK
+});
+
+/** 半模态背板：材质或不透明底色，二选一（同时存在时底色会把材质整块盖死）。 */
+export interface SheetBackdrop {
+  backgroundColor: ResourceColor;
+  material: uiMaterial.Material | undefined;
+}
+
+/**
+ * 半模态背板的纯函数（设备能力与降级底色作入参，Local 单测覆盖）。
+ * 不支持沉浸材质时 `systemMaterial` 无效果 → 退回不透明底色，避免正文直接叠在页面上。
+ */
+export function sheetBackdropFor(immersiveSupported: boolean, fallbackBackground: ResourceColor): SheetBackdrop {
+  if (immersiveSupported) {
+    return { backgroundColor: Color.Transparent, material: SHEET_MATERIAL };
+  }
+  return { backgroundColor: fallbackBackground, material: undefined };
+}
+
+let sheetBackdropCache: SheetBackdrop | undefined = undefined;
+
+/**
+ * 当前设备的半模态背板。**必须在 windowStage 创建之后调用**（页面 build 满足；
+ * Ability `onCreate` 里读能力会得到「不支持」，误判成降级）。只求值一次并留一条日志。
+ */
+export function sheetBackdrop(): SheetBackdrop {
+  if (sheetBackdropCache === undefined) {
+    const supported: boolean = uiMaterial.isImmersiveMaterialSupported();
+    sheetBackdropCache = sheetBackdropFor(supported, $r('app.color.bg_secondary'));
+    Logger.info('Materials', `sheet backdrop immersive=${supported}`);
+  }
+  return sheetBackdropCache;
+}
+
+/**
+ * 普通组件（Row/Column 等）的 `systemMaterial` 只在 `Navigation/NavDestination` 标题栏和
+ * `barPosition=BarPosition.End` 的横向 Tabs 底栏生效（官方《开启沉浸光感》明确列出），
  * 内容区里的自定义容器（评论输入条、提示气泡）设了也**不会渲染**——真机上表现为完全透明。
  * 内容区需要毛玻璃时只能用官方 `backgroundBlurStyle`；不要给这些容器写 `ImmersiveMaterial`。
  */
