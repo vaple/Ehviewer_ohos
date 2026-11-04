@@ -49,6 +49,8 @@ import favoritesBatchTest from './ui/FavoritesBatch.test';
 import jumpStripTest from './ui/JumpStrip.test';
 import galleryListFeedTest from './ui/GalleryListFeed.test';
 import previewStripSourceTest from './ui/PreviewStripSource.test';
+import previewGridSourceTest from './ui/PreviewGridSource.test';
+import previewLoadPolicyTest from './common/PreviewLoadPolicy.test';
 import updateTest from './network/Update.test';
 import tagDbFormatTest from './tagdb/TagDbFormat.test';
 import tagDbConvertTest from './tagdb/TagDbConvert.test';
@@ -106,6 +108,8 @@ export default function testsuite() {
   jumpStripTest();
   galleryListFeedTest();
   previewStripSourceTest();
+  previewGridSourceTest();
+  previewLoadPolicyTest();
   updateTest();
   tagDbFormatTest();
   tagDbConvertTest();

@@ -26,7 +26,8 @@ import { Filter } from '../model/Filter';
 import { qualifyTag, exactTagQuery } from '../search/SearchQuery';
 import { DbHelper } from '../db/DbHelper';
 import { FavCatSheet, FavCatOption } from './FavCatSheet';
-import { PreviewCropCell } from './PreviewCropCell';
+import { PreviewGridCell } from './PreviewGridCell';
+import { PreviewGridSource, PreviewRow } from './PreviewGridSource';
 import { PreviewSpriteCache } from '../service/PreviewSpriteCache';
 import { AppSettings } from '../state/AppSettings';
 import { ReadingProgressStore } from '../state/ReadingProgressStore';
@@ -47,12 +48,25 @@ import { DownloadItem, DownloadQuality, DownloadState } from '../model/DownloadR
 import { DownloadDao } from '../db/dao/DownloadDao';
 import { QuotaLine } from './QuotaLine';
 import { PreviewCell } from '../model/PreviewCell';
+import { chunkOfPage } from '../common/JumpStrip';
+import { shouldLoadAtSpeed, screensPerSecond, SPEED_SAMPLE_MS } from '../common/PreviewLoadPolicy';
 import { JumpSheet } from './JumpSheet';
 import { NsLabel, TagChip } from './TagChip';
 import { TagDb } from '../tagdb/TagDb';
 
-/** 骨架屏预览占位格数（2 行 × 3 列，与真实网格同列宽）。 */
-const SKELETON_PREVIEW_CELLS: number[] = [0, 1, 2, 3, 4, 5];
+/** 预览网格列数（设计规范值：三列等宽，列/行间距 8vp）。 */
+const GRID_COLUMNS: number = 3;
+const GRID_GAP: number = 8;
+/** 行内单格宽度：三列均分，扣掉两个列间距（`calc` 跟容器走，不按机型写死）。 */
+const GRID_CELL_WIDTH: string = `calc((100% - ${(GRID_COLUMNS - 1) * GRID_GAP}vp) / ${GRID_COLUMNS})`;
+/** 站点 `#gdt` 典型格子 200×137；详情首块没给几何时用它占位（宽/高）。 */
+const DEFAULT_PREVIEW_ASPECT: number = 200 / 137;
+/** 预取提前量（页）：可视窗尾部再往后取这么多页（= 一个站点块），跨块时不会空窗（一行 3 页）。 */
+const PREFETCH_PAGES: number = 20;
+/** 失败块冷却（ms）：取块失败后至少隔这么久才重试，防止一次抖动打成请求风暴。 */
+const CHUNK_RETRY_MS: number = 3000;
+/** 停稳后的静默窗（ms）：final 的 index 回调可能还在路上，安静下来再取块（与跳页条带同口径）。 */
+const PREVIEW_SETTLE_MS: number = 120;
 
 /** 底部动作条自动收起的滚动阈值（vp）：滚过标题区才开始收，避免顶部轻扫就躲。 */
 const BAR_HIDE_AFTER: number = 240;
@@ -89,20 +103,30 @@ export struct GalleryDetailPage {
   /** 封面：`thumbUrl` 远端地址（`detail.thumb`），`thumb` 落盘后的本地 URI（`Image` 渲染用；沿 `GalleryRowItem` 命名）。 */
   @Local thumbUrl: string = '';
   @Local thumb: string = '';
-  /** 预览格（首块随详情自带，后块滚动按需追加）。 */
-  @Local previewCells: PreviewCell[] = [];
-  /** 预览区几何（滚动预取估算用；仅作取块启发，不影响渲染精度）。 */
-  private gridTopY: number = 0;
-  private gridHeight: number = 0;
-  private lastPrefRow: number = -1;
-  /** 已载页（可视窗缺页判定用）。 */
-  private loadedPages: Set<number> = new Set<number>();
-  /** 已载最大页（滚到底追加下一块的起点；只往前，不回头补跳过的远端）。 */
-  private maxLoadedPage: number = -1;
-  /** 在飞分块（同块并发合并）。 */
+  /**
+   * 预览网格（行 = 3 页）：总行数由 `pages` 决定，未取到的页先占位。
+   * 为什么是独立数据源 + `List`：网格必须是列表里的普通行，**不能**再嵌一个同向可滚动组件
+   * （`Grid` 会吃掉手势 → 页面停在首块 20 张，见 `ui/AGENTS.md` #69）。
+   */
+  private gridSource: PreviewGridSource = new PreviewGridSource(GRID_COLUMNS);
+  /** 预览网格总页数：`pages` 与首块自带的最大页码取大（`Length` 解析失败时首块仍能显示）。 */
+  private previewPages: number = 0;
+  /** 占位宽高比（取自首块首格；骨架与未取到的格子共用，避免数据到达时行高跳动）。 */
+  private placeholderAspect: number = DEFAULT_PREVIEW_ASPECT;
+  /** 在飞分块（同块并发合并；失败摘掉，冷却后可重试）。 */
   private chunkInflight: Set<number> = new Set<number>();
-  /** 取空过的分块（不再重打）。 */
-  private chunkDone: Set<number> = new Set<number>();
+  /** 失败块的冷却起点（ms）：取块失败后按 `CHUNK_RETRY_MS` 限流，避免一次网络抖动打成请求风暴。 */
+  private chunkFailedAt: Map<number, number> = new Map<number, number>();
+  /** 最近一次上报的可视行（速度采样 / 停稳取块都用它）。 */
+  private visibleRowStart: number = -1;
+  private visibleRowEnd: number = -1;
+  /** 停稳取块的定时器（`-1` = 没有待触发的）。 */
+  private settleTimer: number = -1;
+  /** 视口高度（vp，`List.onAreaChange` 读；速度按「屏/秒」归一化要用）。 */
+  private viewportH: number = 0;
+  /** 速度采样窗起点（`0` = 下一拍重新取样；`onScrollStart` 重置）。 */
+  private speedSampleAt: number = 0;
+  private speedSampleOffset: number = 0;
   private spriteCache: PreviewSpriteCache = new PreviewSpriteCache();
   private spriteClient: EhClient | undefined = undefined;
   private spriteGid: number = -1;
@@ -232,6 +256,11 @@ export struct GalleryDetailPage {
       return;
     }
     this.progressPage = this.progress.load(this.gid);
+  }
+
+  aboutToDisappear(): void {
+    // 离页后停稳定时器不应再发预览请求（此时页面状态已不可用）。
+    this.cancelSettle();
   }
 
   private async load(): Promise<void> {
@@ -398,17 +427,19 @@ export struct GalleryDetailPage {
     await HistoryDao.trimTo(200);
   }
 
-  /** 预览格初装（首块）；缩略图由格子 `onAppear` 经缓存按需取。 */
+  /**
+   * 预览网格初装：按总页数铺满占位行，再把详情自带的首块（20 页）写进去。
+   * 其余块由速度采样（慢拖/慢惯性）与停稳兜底按块取，不再靠滚到列表底部的边事件。
+   */
   private setPreviews(items: PreviewItem[]): void {
     const cells: PreviewCell[] = [];
-    const seen: boolean[] = [];
-    this.loadedPages.clear();
-    this.maxLoadedPage = -1;
+    const seen: Set<number> = new Set<number>();
+    let lastPage: number = -1;
     for (let i = 0; i < items.length; i++) {
-      if (seen[items[i].page]) {
+      if (seen.has(items[i].page)) {
         continue;
       }
-      seen[items[i].page] = true;
+      seen.add(items[i].page);
       const cell: PreviewCell = new PreviewCell();
       cell.page = items[i].page;
       cell.url = items[i].imageUrl;
@@ -417,22 +448,27 @@ export struct GalleryDetailPage {
       cell.w = items[i].w;
       cell.h = items[i].h;
       cells.push(cell);
-      this.loadedPages.add(items[i].page);
-      if (items[i].page > this.maxLoadedPage) {
-        this.maxLoadedPage = items[i].page;
+      if (items[i].page > lastPage) {
+        lastPage = items[i].page;
       }
     }
-    this.previewCells = cells;
-    this.lastPrefRow = -1;
     this.chunkInflight.clear();
-    this.chunkDone.clear();
+    this.chunkFailedAt.clear();
     this.chunkCells.clear();
     this.chunkPromises.clear();
+    // 行数按「站点页数」与「首块自带的最大页码」的较大者：`Length:` 解析不出来时预览也不该整块空白。
+    this.previewPages = Math.max(this.pages, lastPage + 1);
+    this.placeholderAspect = cells.length > 0 && cells[0].h > 0
+      ? cells[0].w / cells[0].h : DEFAULT_PREVIEW_ASPECT;
+    this.gridSource.reset(this.previewPages);
+    this.gridSource.apply(cells);
     // 详情自带的预览就是第 0 块：先塞进块缓存，跳页条带默认从第 1 页打开时不再重下一遍。
     // 复用同一批 `PreviewCell` 实例是安全的：两条路径都只读它（条带写入时是拷贝到自己的格子里）。
     this.chunkCells.set(0, cells);
     this.spriteClient = undefined;
     this.spriteCache.clear();
+    // 首屏不先给一片灰：详情一回来就按当前可视行取一次（此时通常只命中首块）。
+    this.scheduleSettle();
   }
 
   /**
@@ -475,61 +511,90 @@ export struct GalleryDetailPage {
     })();
   }
 
-  /** 可视窗缺页补块（chunk 可直取，不必顺序爬；行→页用稠密映射——未载行无格子，只能估算，偏了由 chunkDone 兜底只浪费一次）。 */
-  private ensureVisibleChunks(firstRow: number, lastRow: number): void {
-    if (this.data === null || this.pages <= 0) {
+  /**
+   * 速度采样：每 `SPEED_SAMPLE_MS` 算一次「屏/秒」，只有不快于门限时才取块。
+   *
+   * 为什么判据是「屏/秒」：一行在视口里的停留时长 `T = 1 / (屏/秒)`，与屏高、行高都无关；
+   * 同一个「行/秒」在 9 行屏和 18 行折叠屏上，用户感知的速度差一倍
+   * （见 `common/PreviewLoadPolicy`）。所以快甩自动不取、慢拖与慢惯性自动取，
+   * 不需要再单独判 `ScrollState.Fling`（慢 fling 的行确实停留够久，该取）。
+   */
+  private sampleSpeed(offsetVp: number): void {
+    const now: number = Date.now();
+    if (this.speedSampleAt === 0) {
+      this.speedSampleAt = now;
+      this.speedSampleOffset = offsetVp;
       return;
     }
-    const chunks: number[] = [];
-    for (let row = firstRow; row <= lastRow; row++) {
-      for (let k = 0; k < 3; k++) {
-        const page: number = row * 3 + k;
-        if (page < 0 || page >= this.pages || this.loadedPages.has(page)) {
-          continue;
-        }
-        const chunk: number = Math.floor(page / 20);
-        if (!this.chunkInflight.has(chunk) && !this.chunkDone.has(chunk) && chunks.indexOf(chunk) < 0) {
-          chunks.push(chunk);
-        }
-      }
+    const dt: number = now - this.speedSampleAt;
+    if (dt < SPEED_SAMPLE_MS) {
+      return;
     }
-    for (let i = 0; i < chunks.length; i++) {
-      this.ensureChunk(chunks[i]);
+    const dy: number = offsetVp - this.speedSampleOffset;
+    this.speedSampleAt = now;
+    this.speedSampleOffset = offsetVp;
+    if (this.viewportH <= 0) {
+      return;
+    }
+    if (!shouldLoadAtSpeed(screensPerSecond(dy, this.viewportH, dt))) {
+      return;
+    }
+    this.requestRows(this.visibleRowStart, this.visibleRowEnd + 1);
+  }
+
+  /** 取消待触发的停稳取块（新一轮滑动开始 / 换画廊 / 离开页面）。 */
+  private cancelSettle(): void {
+    if (this.settleTimer >= 0) {
+      clearTimeout(this.settleTimer);
+      this.settleTimer = -1;
     }
   }
 
-  /** 滚动预取：由预览区全局位置估算可视行，只取可视窗所在块（fling 直达可跳过中间块）。 */
-  private prefetchByOffset(): void {
-    const rows: number = Math.ceil(this.previewCells.length / 3);
-    if (rows <= 0 || this.gridHeight <= 0 || this.gridTopY >= 0) {
-      return;
-    }
-    const avgRowH: number = this.gridHeight / rows;
-    if (avgRowH <= 0) {
-      return;
-    }
-    const visibleRow: number = Math.floor(-this.gridTopY / avgRowH);
-    if (visibleRow === this.lastPrefRow) {
-      return;
-    }
-    this.lastPrefRow = visibleRow;
-    this.ensureVisibleChunks(Math.max(0, visibleRow - 4), visibleRow + 6);
+  /**
+   * 停稳兜底：速度门限已经处理「慢拖 / 慢惯性」，这里保证「抬手即停」也有一次最终测量，
+   * 同时兜住失败块的重试（冷却已过的块才会重发）。
+   */
+  private scheduleSettle(): void {
+    this.cancelSettle();
+    this.settleTimer = setTimeout(() => {
+      this.settleTimer = -1;
+      this.requestRows(this.visibleRowStart, this.visibleRowEnd + 1);
+    }, PREVIEW_SETTLE_MS);
   }
 
-  /** 滚到底追加下一块：只从已载前沿往前取（可见相邻），不回头补跳过的远端缺块（远端由可见窗按需取）。 */
-  private appendNextChunk(): void {
-    if (this.data === null || this.pages <= 0 || this.maxLoadedPage < 0) {
+  /**
+   * 取这些预览行覆盖的块（尾部再往后多取 `PREFETCH_PAGES` 页 ≈ 一个站点块，跨块不空窗）。
+   * 行→块用 `chunkOfPage`：甩动/跳页直达时中间没看过的块不该发请求；同块并发由 `previewChunk` 合并。
+   * 调用点只有速度采样与停稳兜底，滑动过程中的每一帧都不会发请求。
+   */
+  private requestRows(firstRow: number, lastRow: number): void {
+    if (this.data === null || this.previewPages <= 0) {
       return;
     }
-    const next: number = this.maxLoadedPage + 1;
-    if (next < this.pages) {
-      this.ensureChunk(Math.floor(next / 20));
+    const rows: number = this.gridSource.totalCount();
+    if (rows <= 0) {
+      return;
+    }
+    const columns: number = this.gridSource.columns;
+    const from: number = Math.max(0, Math.min(firstRow, lastRow));
+    const to: number = Math.min(rows - 1, Math.max(firstRow, lastRow));
+    const firstPage: number = from * columns;
+    const lastPage: number = Math.min((to + 1) * columns - 1 + PREFETCH_PAGES, this.previewPages - 1);
+    for (let chunk = chunkOfPage(firstPage); chunk <= chunkOfPage(lastPage); chunk++) {
+      this.ensureChunk(chunk);
     }
   }
 
-  /** 取单块并合并（按 `page` 去重；在飞/取空跳过）。 */
+  /** 取单块：已取到 / 在飞 / 失败冷却中直接跳过。 */
   private ensureChunk(chunk: number): void {
-    if (this.data === null || this.chunkInflight.has(chunk) || this.chunkDone.has(chunk)) {
+    if (this.data === null || chunk < 0) {
+      return;
+    }
+    if (this.chunkInflight.has(chunk) || this.chunkCells.has(chunk)) {
+      return;
+    }
+    const failedAt: number | undefined = this.chunkFailedAt.get(chunk);
+    if (failedAt !== undefined && Date.now() - failedAt < CHUNK_RETRY_MS) {
       return;
     }
     const gid: number = this.gid;
@@ -538,6 +603,7 @@ export struct GalleryDetailPage {
       Logger.error('Detail', `preview chunk failed gid=${gid} chunk=${chunk}: ${e}`);
       if (this.gid === gid) {
         this.chunkInflight.delete(chunk);
+        this.chunkFailedAt.set(chunk, Date.now());
       }
     });
   }
@@ -606,21 +672,11 @@ export struct GalleryDetailPage {
       return;
     }
     this.chunkInflight.delete(chunk);
-    const fresh: PreviewCell[] = [];
-    for (let i = 0; i < fetched.length; i++) {
-      if (!this.loadedPages.has(fetched[i].page)) {
-        fresh.push(fetched[i]);
-        this.loadedPages.add(fetched[i].page);
-        if (fetched[i].page > this.maxLoadedPage) {
-          this.maxLoadedPage = fetched[i].page;
-        }
-      }
+    this.chunkFailedAt.delete(chunk);
+    if (fetched.length > 0) {
+      this.gridSource.apply(fetched);
     }
-    if (fresh.length > 0) {
-      this.previewCells = this.previewCells.concat(fresh);
-    } else {
-      this.chunkDone.add(chunk);
-    }
+    // 空数组 = 这块确实没有预览（请求本身成功）：`previewChunk` 已把它写进块缓存，`ensureChunk` 不会再打。
   }
 
   /** 打开跳页半模态（与收藏/下载共用一个 `bindSheet`，见 `sheetKind`）。 */
@@ -1014,25 +1070,38 @@ export struct GalleryDetailPage {
     .borderRadius(CARD_RADIUS)
   }
 
+  /** 骨架预览格：与真图同列宽、同占位比例（行高一致，详情回来时不跳位）。 */
+  @Builder
+  skeletonPreviewCell() {
+    Column() {
+      SkeletonBlock({ h: '100%', corner: THUMB_RADIUS })
+    }
+    .width(GRID_CELL_WIDTH)
+    .aspectRatio(this.placeholderAspect)
+  }
+
+  /** 骨架预览行（官方流光占位，不是内容遮罩）。 */
+  @Builder
+  skeletonPreviewRow() {
+    Row({ space: GRID_GAP }) {
+      this.skeletonPreviewCell()
+      this.skeletonPreviewCell()
+      this.skeletonPreviewCell()
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Top)
+  }
+
   /** 加载中：评分 / 标签 / 评论 / 预览四块先占位，详情回来后就地替换（首帧不跳位）。 */
   @Builder
   loadingSkeletons() {
     this.skeletonCard(64)
     this.skeletonCard(132)
     this.skeletonCard(96)
-    Grid() {
-      Repeat(SKELETON_PREVIEW_CELLS)
-        .each((ri: RepeatItem<number>) => {
-          GridItem() {
-            SkeletonBlock({ w: '100%', h: '100%', corner: THUMB_RADIUS })
-          }
-        })
-        .key((i: number) => `${i}`)
+    Column({ space: GRID_GAP }) {
+      this.skeletonPreviewRow()
+      this.skeletonPreviewRow()
     }
-    .columnsTemplate('1fr 1fr 1fr')
-    .columnsGap(8)
-    .rowsGap(8)
-    .height(184)
     .width('100%')
   }
 
@@ -1056,6 +1125,34 @@ export struct GalleryDetailPage {
     .borderRadius(CARD_RADIUS)
   }
 
+  /**
+   * 一行预览（3 格等宽）。格子自己从「页码占位」切成真图；取块由停稳事件驱动，不在滑动中发请求。
+   * 行数固定（`gridSource`），所以滚动范围稳定，未取到的页只是灰格，不会把列表越滚越长。
+   */
+  @Builder
+  previewRow(row: PreviewRow) {
+    Row({ space: GRID_GAP }) {
+      Repeat(row.cells)
+        .each((ri: RepeatItem<PreviewCell>) => {
+          Column() {
+            PreviewGridCell({
+              cell: ri.item,
+              aspect: this.placeholderAspect,
+              spriteOf: (cell: PreviewCell) => this.spriteFor(cell, this.gid)
+            })
+          }
+          .width(GRID_CELL_WIDTH)
+          .onClick(() => {
+            this.openReader(ri.item.page);
+          })
+        })
+        .key((cell: PreviewCell) => `${cell.page}`)
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Top)
+    .padding({ left: PAGE_PADDING, right: PAGE_PADDING })
+  }
+
   /** 重试：清错误 → 重新拉详情（`data` 仍为空则回到骨架态）。 */
   private retryLoad(): void {
     this.message = '';
@@ -1065,7 +1162,10 @@ export struct GalleryDetailPage {
   build() {
     HdsNavDestination() {
       Stack({ alignContent: Alignment.Bottom }) {
-      Scroll(this.scroller) {
+      List({ space: GRID_GAP, scroller: this.scroller }) {
+        // 头部（封面 / 评分 / 标签 / 评论 / 「预览」标题）作为一个 ListItem：
+        // 预览网格必须是列表自己的行，不能再嵌同向可滚动组件（见 `gridSource` 注释）。
+        ListItem() {
         Column({ space: 10 }) {
           // 顶部避让：与 HDS 标题栏同高但放在滚动内容里（内容可钻到栏下，渐变模糊才有内容穿过）。
           Column().height(this.windowState.safeTop + TITLE_BAR_H)
@@ -1189,6 +1289,13 @@ export struct GalleryDetailPage {
           .alignItems(VerticalAlign.Center)
           .backgroundColor($r('app.color.bg_secondary'))
           .borderRadius(CARD_RADIUS)
+          // 页面级提示（评分失败 / 登录后才能评分）：跟在评分卡下面，用户点完就在眼前。
+          if (this.message.length > 0) {
+            Text(this.message)
+              .fontSize(12)
+              .fontColor($r('app.color.text_secondary'))
+              .width('100%')
+          }
           // 标签卡：官方 ChipV2 芯片分组（点按搜索 / 长按菜单语义不变）。
           Column() {
             Repeat(this.tagGroups)
@@ -1278,63 +1385,53 @@ export struct GalleryDetailPage {
             SubHeaderV2({ title: new SubHeaderV2Title({ primaryTitle: '预览' }) })
           }
           .width('calc(100% + 32vp)')
-          Grid() {
-            Repeat(this.previewCells)
-              .each((ri: RepeatItem<PreviewCell>) => {
-                GridItem() {
-                  PreviewCropCell({
-                    page: ri.item.page, w: ri.item.w, h: ri.item.h,
-                    cacheKey: PreviewSpriteCache.keyOf(ri.item.url, ri.item.x, ri.item.y, ri.item.w, ri.item.h),
-                    load: () => this.spriteFor(ri.item, this.gid)
-                  })
-                  .width('100%')
-                  .onClick(() => {
-                    this.openReader(ri.item.page);
-                  })
-                }
-              })
-              .key((cell: PreviewCell) => `${cell.page}`)
-          }
-          .columnsTemplate('1fr 1fr 1fr')
-          .columnsGap(8)
-          .rowsGap(8)
-          .width('100%')
-          .onAreaChange((_oldArea: Area, newArea: Area) => {
-            const pos = newArea.globalPosition;
-            if (pos === undefined || pos.y === undefined) {
-              return;
-            }
-            this.gridTopY = Number.parseFloat(pos.y.toString());
-            this.gridHeight = Number.parseFloat(newArea.height.toString());
-            this.prefetchByOffset();
-          })
-          }
-          if (this.data !== null && this.message.length > 0) {
-            Text(this.message)
-              .fontSize(12)
-              .fontColor($r('app.color.text_secondary'))
-              .width('100%')
           }
         }
         .width('100%')
-        // 底部留出动作条背板 + 离底边距 + 安全区：最后一行预览图不会被压住。
-        .padding({
-          left: PAGE_PADDING,
-          right: PAGE_PADDING,
-          top: PAGE_PADDING,
-          bottom: PAGE_PADDING + ACTION_BAR_H + ACTION_BAR_MARGIN + this.windowState.safeBottom
-        })
+        .padding({ left: PAGE_PADDING, right: PAGE_PADDING, top: PAGE_PADDING })
+        }
+        LazyForEach(this.gridSource, (row: PreviewRow) => {
+          ListItem() {
+            this.previewRow(row)
+          }
+        }, (row: PreviewRow, index: number) => `${this.gridSource.generation}:${index}`)
+        // 尾项：底部安全区（动作条背板不会压住最后一行预览）。
+        ListItem() {
+          Column()
+            .width('100%')
+            .padding({
+              left: PAGE_PADDING,
+              right: PAGE_PADDING,
+              bottom: PAGE_PADDING + ACTION_BAR_H + ACTION_BAR_MARGIN + this.windowState.safeBottom
+            })
+        }
       }
       .width('100%')
       .height('100%')
       .backgroundColor($r('app.color.bg_primary'))
-      .onScrollEdge((side: Edge) => {
-        if (side === Edge.End) {
-          this.appendNextChunk();
-        }
+      .cachedCount(4)
+      .onAreaChange((_oldArea: Area, newArea: Area) => {
+        // 视口高度（vp）：速度按「屏/秒」归一化用，旋转/折叠展开后自动跟随。
+        this.viewportH = Number.parseFloat(newArea.height.toString());
+      })
+      .onScrollIndex((start: number, end: number) => {
+        // List 第 0 项是头部、最后一项是尾项 → 预览行索引 = item 索引 - 1。
+        // 这里只记可视窗：是否取块由 `sampleSpeed`（屏/秒）与停稳兜底决定。
+        this.visibleRowStart = start - 1;
+        this.visibleRowEnd = end - 1;
+      })
+      .onScrollStart(() => {
+        // 新手势开始：上一轮还没触发的停稳取块作废；速度从这一拍重新取样。
+        this.cancelSettle();
+        this.speedSampleAt = 0;
+      })
+      .onScrollStop(() => {
+        this.scheduleSettle();
       })
       .onDidScroll(() => {
-        this.refreshBar(this.scroller.currentOffset().yOffset);
+        const y: number = this.scroller.currentOffset().yOffset;
+        this.refreshBar(y);
+        this.sampleSpeed(y);
       })
       // 底部动作条：官方 `HdsActionBar`（背板 + 主按钮 + 跳页），主按钮用自定义 builder 承载页码。
       if (this.pages > 0) {
