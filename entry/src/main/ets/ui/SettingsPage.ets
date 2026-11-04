@@ -767,7 +767,9 @@ export struct SettingsPage {
         Scroll(this.scroller) {
           Column({ space: 6 }) {
             // 顶部避让放进滚动内容：内容能钻到标题栏下，渐变模糊才有东西可糊。
-            Column().height(this.windowState.safeTop + TITLE_BAR_H + 16)
+            // 不加额外呼吸：`safeTop + TITLE_BAR_H` 正好落在标题栏底边，
+            // 而 HDS 的 `SubHeaderV2` 自身还有约 19vp 上内边距（再加就会变成“一片空白”）。
+            Column().height(this.windowState.safeTop + TITLE_BAR_H)
             SubHeaderV2({ title: new SubHeaderV2Title({ primaryTitle: '账号' }) })
             HdsListItemCard({
               prefixItem: new PrefixIcon({ iconValue: { symbol: $r('sys.symbol.person') } }),
