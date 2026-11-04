@@ -35,9 +35,12 @@ class FakeJar implements CookieJar {
 /** 计数用 HTTP 假件：详情 GET 一律回真实 fixture，写操作回最小合法包。 */
 class FakeHttp implements HttpClient {
   detailGets: number = 0;
+  /** 最近一次 GET 的 Cookie（用于断言 `nw=1` 随每个请求发出）。 */
+  lastCookies: Record<string, string> = {};
 
   get(url: string, opt?: HttpRequestOptions): Promise<HttpResponse> {
     this.detailGets += 1;
+    this.lastCookies = opt?.cookies ?? {};
     const resp: HttpResponse = { status: 200, contentType: 'text/html', body: GALLERY_DETAIL_HTML };
     return Promise.resolve(resp);
   }
@@ -108,6 +111,14 @@ export default function ehClientCacheTest() {
       expect(http.detailGets).assertEqual(1);
       // 收尾：共享单例是全 App 用的，别把这条用例的数据留给别的用例。
       sharedDetailCache.clear();
+    });
+
+    it('sends_content_warning_bypass_cookie', 0, async () => {
+      const http: FakeHttp = new FakeHttp();
+      const client: EhClient = newClient(http);
+      await client.getGalleryDetail(EhSite.E, GID, TOKEN, 0);
+      // 站点警告页没有 `#gn`，不带 `nw=1` 会让被标记的画廊固定解析失败（源工程默认值）。
+      expect(http.lastCookies['nw']).assertEqual('1');
     });
 
     it('explicit_disabled_cache_hits_network_every_time', 0, async () => {

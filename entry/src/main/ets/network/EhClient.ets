@@ -38,6 +38,11 @@ export interface EhClientOptions {
   cache?: DetailCache;
 }
 
+/** 站点内容警告开关的 Cookie（源 `EhConfig.KEY_CONTENT_WARNING`）。 */
+const CONTENT_WARNING_COOKIE: string = 'nw';
+/** 不显示内容警告（源 `EhConfig.CONTENT_WARNING_NOT_SHOW`）。 */
+const CONTENT_WARNING_NOT_SHOW: string = '1';
+
 /** E-Hentai 请求层：站点/Referer/Cookie 组装 + 错误检测 + 解析。 */
 export class EhClient {
   private http: HttpClient;
@@ -65,9 +70,17 @@ export class EhClient {
     await this.cookies.flush();
   }
 
-  /** 统一装配请求选项：调用方头 + 身份 Cookie。超时由 `RcpHttpClient.configOf` 统一给。 */
+  /**
+   * 统一装配请求选项：调用方头 + 身份 Cookie。超时由 `RcpHttpClient.configOf` 统一给。
+   *
+   * 固定补 `nw=1`（不显示内容警告）：被站点标记 Offensive 的画廊会先返回一个 4 KB 的警告页，
+   * 里面没有 `#gn`，详情解析直接失败（真机 gid 4302934，`parse null ... reason=no #gn`）。
+   * 源工程 `EhCookieStore` 对所有 E 站请求都带这个值（`EhConfig.CONTENT_WARNING_NOT_SHOW`）。
+   */
   private requestOptions(headers: Record<string, string>): HttpRequestOptions {
-    const opt: HttpRequestOptions = { cookies: this.cookies.all(), headers: headers };
+    const cookies: Record<string, string> = this.cookies.all();
+    cookies[CONTENT_WARNING_COOKIE] = CONTENT_WARNING_NOT_SHOW;
+    const opt: HttpRequestOptions = { cookies: cookies, headers: headers };
     return opt;
   }
 
