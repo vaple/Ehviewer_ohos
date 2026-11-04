@@ -186,12 +186,18 @@ export struct SearchPage {
     return SEARCH_ROW_H + (showSummary ? SUMMARY_ROW_H : 0);
   }
 
-  /** 这次提交是否真的构成一次搜索（空查询 + 无语言/排除时 `load` 会直接返回，历史也不该记）。 */
-  @Computed get searchable(): boolean {
+  /**
+   * 这次提交是否真的构成一次搜索（空查询 + 无语言/排除时 `load` 会直接返回，历史也不该记）。
+   *
+   * 刻意用方法而不是 `@Computed`：同一拍里刚改完 `segments` 再读 `@Computed` 会拿到**上一次**的缓存值
+   * （真机实测：清空条件后 `queryText` 仍是旧的 "test"，于是空态重置被整个跳过）。
+   */
+  private searchable(): boolean {
     if (this.kind !== 'keyword') {
       return true;
     }
-    return this.queryText.length > 0 || this.selectedLang.length > 0 ||
+    const query: string = joinQueryText(this.segments, this.draft);
+    return query.length > 0 || this.selectedLang.length > 0 ||
       exclusionQueryOf(this.activeRules, this.ignoredExclusions).length > 0;
   }
 
@@ -304,7 +310,7 @@ export struct SearchPage {
    * 失败只记日志——历史是便利功能，不能因为它让搜索失败。
    */
   private async recordHistory(): Promise<void> {
-    if (!this.searchable) {
+    if (!this.searchable()) {
       return;
     }
     const record: QuickSearch = {
@@ -369,6 +375,7 @@ export struct SearchPage {
       await DbHelper.init(this.context());
       await QuickSearchDao.clearHistory();
       await this.reloadHistory();
+      promptAction.showToast({ message: '已清空搜索历史' });
     } catch (e) {
       Logger.error('Search', `history clear failed: ${e}`);
     }
@@ -592,7 +599,12 @@ export struct SearchPage {
     return isNaN(n) || n <= 0 ? -1 : n;
   }
 
-  /** 点 chip：包含 ↔ 排除（改 `segments` 后立即重搜）。 */
+  /**
+   * 条件 chip 的编辑（切换包含/排除、删除、清空）**只改状态，不发请求**。
+   *
+   * 唯一生效点是回车 / 蓝「搜索」：否则「＋」和联想（同样是改条件）不搜、删除却搜，
+   * 同一个动作两种脾气；而且删一个 tag 就打一次整页请求也不划算。
+   */
   private toggleChip(index: number): void {
     if (index < 0 || index >= this.segments.length) {
       return;
@@ -603,7 +615,6 @@ export struct SearchPage {
     // 条件变了：候选是按旧草稿算的，留着会按过期区间入列。
     this.closePanels();
     this.segments = next;
-    this.load(true);
   }
 
   private removeChip(index: number): void {
@@ -613,12 +624,46 @@ export struct SearchPage {
     const next: string[] = this.segments.slice();
     next.splice(index, 1);
     this.closePanels();
-    if (next.length === 0) {
-      // 最后一条 chip 删掉后 chip 行不再渲染：`onAreaChange` 不会再来，高度必须在这里归零。
-      this.chipsHeight = 0;
-    }
     this.segments = next;
-    this.load(true);
+    this.settleAfterEdit();
+  }
+
+  /**
+   * 清空全部条件（chips 行末尾的 `xmark_circle`）。
+   * 只动 `segments`：草稿属于输入框（它自己有清除入口），筛选属于另一套状态。
+   */
+  private clearConditions(): void {
+    if (this.segments.length === 0) {
+      return;
+    }
+    this.closePanels();
+    this.segments = [];
+    this.settleAfterEdit();
+  }
+
+  /**
+   * 条件改完后的收尾。
+   *
+   * 两条纪律：
+   * - 查询还在（草稿非空）→ 什么都不做，等用户按搜索（结果与条件暂时不一致是"待提交"的正常状态）；
+   * - 查询被清空 → 立刻回到「未搜索」态（清列表、展开筛选、回顶），**不发请求**。
+   *   否则会留一屏和空条件对不上的结果，比多按一次搜索糟得多。
+   */
+  private settleAfterEdit(): void {
+    // 不能读 `@Computed get queryText`：同一拍里刚清完 `segments`，它还是上一次的缓存值。
+    if (joinQueryText(this.segments, this.draft).length > 0) {
+      return;
+    }
+    Logger.info('Search', 'conditions cleared → reset to initial state');
+    // chips 行不再渲染：`onAreaChange` 不会再来，高度必须手动归零。
+    this.chipsHeight = 0;
+    this.items = [];
+    this.message = '';
+    this.dataSource.setItems(this.items, false);
+    this.getUIContext().animateTo({ duration: 250, curve: Curve.EaseInOut }, () => {
+      this.filtersExpanded = true;
+      this.listScroller.scrollToIndex(0);
+    });
   }
 
   private buildUrl(site: EhSite): string {
@@ -682,7 +727,7 @@ export struct SearchPage {
     if (refresh) {
       await this.reloadRules();
     }
-    if (!this.searchable) {
+    if (!this.searchable()) {
       this.message = '';
       this.isRefreshing = false;
       return;
@@ -929,6 +974,19 @@ export struct SearchPage {
           // key 必须带内容：只按 index 的话，`-` 前缀切换后 key 不变，`Repeat` 会复用旧节点、
           // 不重建，表现为"点了没反应"（真机实证：日志已进 `toggleChip`，色却不变）。
           .key((token: string, index: number) => `${index}:${token}`)
+        // 清空全部条件：只在有条件时出现，位置就在条件末尾（条件在哪，清空就在哪）。
+        // 用 `xmark_circle` 而不是「清空」两个字：§7 图标优先于裸中文按钮。
+        SymbolGlyph($r('sys.symbol.xmark_circle'))
+          .fontSize(18)
+          .fontColor([$r('app.color.text_secondary')])
+          .width(TOUCH_MIN)
+          .height(32)
+          .id('search-clear-conditions')
+          .accessibilityText('清空搜索条件')
+          .margin({ left: 3 })
+          .onClick(() => {
+            this.clearConditions();
+          })
       }
       .width('100%')
     }

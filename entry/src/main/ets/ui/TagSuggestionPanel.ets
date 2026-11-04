@@ -119,7 +119,9 @@ export struct TagSuggestionPanel {
       .constraintSize({ maxHeight: this.viewportHeight })
     }
     .width('100%')
-    .backgroundColor($r('app.color.bg_secondary'))
+    // 半透明磨砂（与搜索历史面板同一套）：内容区自绘浮层拿不到系统材质，只能用官方模糊；
+    // 不要叠不透明底色，那会把模糊盖死。
+    .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
     .borderRadius(CARD_RADIUS)
     // 卡片浮在列表缩略图之上：用边框（而不是自绘阴影/半透明遮罩）划出边界，深浅色都跟令牌走。
     .border({ width: 1, color: $r('app.color.divider') })
