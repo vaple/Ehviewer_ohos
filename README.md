@@ -12,8 +12,10 @@ HarmonyOS NEXT 移植。与 E-Hentai / ExHentai 官方无关：只提供客户�
 ## 功能
 
 - **站点**：E-Hentai / ExHentai 双站点切换；Cookie 登录，支持从浏览器复制整串 Cookie 导入
-- **浏览**：首页热门、订阅（watched）、排行榜（含档位筛选）、搜索（支持站点语法与「搜索排除」规则）
-- **详情**：封面、标签、评分、评论、云端收藏分类、预览图
+- **浏览**：首页热门、订阅（watched）、排行榜（含档位筛选）
+- **搜索**：中文输入联想英文标签；包含 / 排除与精确匹配（`other:"artbook$"`、`-artist:akatsuki`）；
+  分类 / 语言 / 星级 / 页数筛选；最近搜索、快搜、搜索排除规则
+- **详情**：封面、标签（可显示中文、长按查看释义）、评分、评论、云端收藏分类、预览图
 - **阅读**：横向 / 纵向翻页、双击与双指缩放、阅读进度记忆、离线打开已下载画廊
 - **历史**：浏览历史
 - **下载**：逐页下载、断点续传、暂停 / 继续 / 删除、失败重试、后台长时任务 + 进度通知
@@ -21,13 +23,15 @@ HarmonyOS NEXT 移植。与 E-Hentai / ExHentai 官方无关：只提供客户�
 
 ## 截图
 
-| 搜索 | 详情 |
-| --- | --- |
-| ![](docs/screenshots/01-search.jpg) | ![](docs/screenshots/02-detail.jpg) |
+搜索支持中文输入联想、包含 / 排除和多条件组合；详情、阅读、下载如下。
 
-| 阅读器 | 下载 |
+| 搜索：中文联想 | 搜索：组合条件 |
 | --- | --- |
-| ![](docs/screenshots/03-reader.jpg) | ![](docs/screenshots/04-downloads.jpg) |
+| ![输入「命运」联想英文标签](docs/screenshots/01-search-suggest.jpg)<br>输入「命运」，直接选英文标签 | ![包含与排除组合](docs/screenshots/02-search-syntax.jpg)<br>`other:"artbook$"` + 排除 `-artist:akatsuki` |
+
+| 详情 | 阅读器 | 下载 |
+| --- | --- | --- |
+| ![](docs/screenshots/03-detail.jpg) | ![](docs/screenshots/04-reader.jpg) | ![](docs/screenshots/05-downloads.jpg) |
 
 ## 下载与安装
 
