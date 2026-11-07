@@ -1,6 +1,7 @@
 {
   "name": "entry",
-  "version": "1.0.0",
+  // 与 AppScope/app.json5 的 versionName 保持一致；这里只是模块元数据，不参与 HAP 版本。
+  "version": "1.2.0",
   "description": "EhViewer entry module.",
   "main": "",
   "author": "vaple",

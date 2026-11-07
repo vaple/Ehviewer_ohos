@@ -1,6 +1,6 @@
 {
   "modelVersion": "26.0.0",
-  "description": "EhViewer — HarmonyOS NEXT client for E-Hentai / ExHentai (com.vaple.ehviewer).",
+  "description": "EhViewer — HarmonyOS NEXT client for E-Hentai / ExHentai (io.github.vaple.ehviewer).",
   "dependencies": {
   },
   "devDependencies": {
