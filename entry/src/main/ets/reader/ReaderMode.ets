@@ -34,3 +34,12 @@ export function resolveStartPage(saved: number, total: number): number {
   }
   return saved >= 0 && saved < total ? saved : 0;
 }
+
+/** 滑杆的显示索引 → 实际页号（0 起）；纵向与 LTR 同值，RTL 反向；空画廊返回 -1。 */
+export function scrubTargetPage(displayIndex: number, total: number,
+  dir: ReadingDirection): number {
+  if (total <= 0) {
+    return -1;
+  }
+  return dir === ReadingDirection.RTL ? toPage(displayIndex, total, dir) : displayIndex;
+}

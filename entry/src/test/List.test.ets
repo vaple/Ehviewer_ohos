@@ -33,6 +33,7 @@ import modelsTest from './model/Models.test';
 import galleryRatingTest from './model/GalleryRating.test';
 import photoSaverTest from './service/PhotoSaver.test';
 import cacheManagerTest from './service/CacheManager.test';
+import previewChunkStoreTest from './service/PreviewChunkStore.test';
 import imageStoreTest from './service/ImageStore.test';
 import readerModeTest from './reader/ReaderMode.test';
 import prefetchPlanTest from './reader/PrefetchPlan.test';
@@ -91,6 +92,7 @@ export default function testsuite() {
   galleryRatingTest();
   photoSaverTest();
   cacheManagerTest();
+  previewChunkStoreTest();
   imageStoreTest();
   readerModeTest();
   prefetchPlanTest();

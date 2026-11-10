@@ -29,6 +29,7 @@ import { FavCatSheet, FavCatOption } from './FavCatSheet';
 import { PreviewGridCell } from './PreviewGridCell';
 import { PreviewGridSource, PreviewRow } from './PreviewGridSource';
 import { PreviewSpriteCache } from '../service/PreviewSpriteCache';
+import { PreviewChunk, PreviewChunkStore } from '../service/PreviewChunkStore';
 import { AppSettings } from '../state/AppSettings';
 import { ReadingProgressStore } from '../state/ReadingProgressStore';
 import { AppStorageV2 } from '@kit.ArkUI';
@@ -48,7 +49,7 @@ import { DownloadItem, DownloadQuality, DownloadState } from '../model/DownloadR
 import { DownloadDao } from '../db/dao/DownloadDao';
 import { QuotaLine } from './QuotaLine';
 import { PreviewCell } from '../model/PreviewCell';
-import { chunkOfPage } from '../common/JumpStrip';
+import { chunkOfPage, rowOfPage } from '../common/JumpStrip';
 import { JumpSheet } from './JumpSheet';
 import { NsLabel, TagChip } from './TagChip';
 import { TagDb } from '../tagdb/TagDb';
@@ -62,8 +63,6 @@ const GRID_CELL_WIDTH: string = `calc((100% - ${(GRID_COLUMNS - 1) * GRID_GAP}vp
 const DEFAULT_PREVIEW_ASPECT: number = 200 / 137;
 /** 预取提前量（页）：可视窗尾部再往后取这么多页（= 一个站点块），跨块时不会空窗（一行 3 页）。 */
 const PREFETCH_PAGES: number = 20;
-/** 失败块冷却（ms）：取块失败后至少隔这么久才重试，防止一次抖动打成请求风暴。 */
-const CHUNK_RETRY_MS: number = 3000;
 /** 停稳后的静默窗（ms）：final 的 index 回调可能还在路上，安静下来再取块（与跳页条带同口径）。 */
 const PREVIEW_SETTLE_MS: number = 120;
 
@@ -112,10 +111,6 @@ export struct GalleryDetailPage {
   private previewPages: number = 0;
   /** 占位宽高比（取自首块首格；骨架与未取到的格子共用，避免数据到达时行高跳动）。 */
   private placeholderAspect: number = DEFAULT_PREVIEW_ASPECT;
-  /** 在飞分块（同块并发合并；失败摘掉，冷却后可重试）。 */
-  private chunkInflight: Set<number> = new Set<number>();
-  /** 失败块的冷却起点（ms）：取块失败后按 `CHUNK_RETRY_MS` 限流，避免一次网络抖动打成请求风暴。 */
-  private chunkFailedAt: Map<number, number> = new Map<number, number>();
   /** 最近一次上报的可视行（取块与停稳兜底都用它）。 */
   private visibleRowStart: number = -1;
   private visibleRowEnd: number = -1;
@@ -125,9 +120,6 @@ export struct GalleryDetailPage {
   private spriteClient: EhClient | undefined = undefined;
   private spriteGid: number = -1;
   private spriteReferer: string = '';
-  /** 块级缓存：详情网格与跳页条带共用，同一块不并发发两次；随 `setPreviews` 清空。 */
-  private chunkCells: Map<number, PreviewCell[]> = new Map<number, PreviewCell[]>();
-  private chunkPromises: Map<number, Promise<PreviewCell[]>> = new Map<number, Promise<PreviewCell[]>>();
   @Local comments: GalleryComment[] = [];
   @Local showSheet: boolean = false;
   /**
@@ -158,6 +150,8 @@ export struct GalleryDetailPage {
   /** 跳页半模态选中的页（0 起；`-1` = 没选）。等 sheet 退场后再进阅读器，避免两套转场叠在一起。 */
   private pendingJumpPage: number = -1;
   private lastScrollY: number = 0;
+  /** 跳页跟随期间抑制动作条收放：程序化下滑不是用户滚动，不能把底栏收掉。 */
+  private suppressBar: boolean = false;
   private progress: ReadingProgressStore = PersistenceV2.globalConnect({
     type: ReadingProgressStore,
     key: 'ReadingProgressStore',
@@ -423,7 +417,7 @@ export struct GalleryDetailPage {
 
   /**
    * 预览网格初装：按总页数铺满占位行，再把详情自带的首块（20 页）写进去。
-   * 其余块由速度采样（慢拖/慢惯性）与停稳兜底按块取，不再靠滚到列表底部的边事件。
+   * 其余块由 `onScrollIndex` 的可视窗驱动、停稳后再补一次（重试/补漏）。
    */
   private setPreviews(items: PreviewItem[]): void {
     const cells: PreviewCell[] = [];
@@ -446,19 +440,15 @@ export struct GalleryDetailPage {
         lastPage = items[i].page;
       }
     }
-    this.chunkInflight.clear();
-    this.chunkFailedAt.clear();
-    this.chunkCells.clear();
-    this.chunkPromises.clear();
     // 行数按「站点页数」与「首块自带的最大页码」的较大者：`Length:` 解析不出来时预览也不该整块空白。
     this.previewPages = Math.max(this.pages, lastPage + 1);
     this.placeholderAspect = cells.length > 0 && cells[0].h > 0
       ? cells[0].w / cells[0].h : DEFAULT_PREVIEW_ASPECT;
     this.gridSource.reset(this.previewPages);
     this.gridSource.apply(cells);
-    // 详情自带的预览就是第 0 块：先塞进块缓存，跳页条带默认从第 1 页打开时不再重下一遍。
-    // 复用同一批 `PreviewCell` 实例是安全的：两条路径都只读它（条带写入时是拷贝到自己的格子里）。
-    this.chunkCells.set(0, cells);
+    // 详情自带的预览就是第 0 块：先塞进共享块缓存，跳页条带默认从第 1 页打开时不再重下一遍。
+    PreviewChunkStore.instance.reset(this.gid);
+    PreviewChunkStore.instance.seed(this.gid, 0, items);
     this.spriteClient = undefined;
     this.spriteCache.clear();
     // 首屏不先给一片灰：详情一回来就按当前可视行取一次（此时通常只命中首块）。
@@ -527,7 +517,7 @@ export struct GalleryDetailPage {
 
   /**
    * 取这些预览行覆盖的块（尾部再往后多取 `PREFETCH_PAGES` 页 ≈ 一个站点块，跨块不空窗）。
-   * 行→块用 `chunkOfPage`；同块由 `chunkCells` / `chunkInflight` 去重。
+   * 行→块用 `chunkOfPage`；同块由 `PreviewChunkStore` 单飞去重。
    * 调用点：`onScrollIndex`（可视窗一变就取，可见优先）与停稳兜底（重试/补漏）。
    */
   private requestRows(firstRow: number, lastRow: number): void {
@@ -548,33 +538,36 @@ export struct GalleryDetailPage {
     }
   }
 
-  /** 取单块：已取到 / 在飞 / 失败冷却中直接跳过。 */
+  /**
+   * 取单块：共享块缓存里已有 / 在飞 / 失败冷却中全交给 store。
+   * 每次滚动都会重复问到，所以冷却期先 `failedRecently` 短路，避免重复打日志。
+   */
   private ensureChunk(chunk: number): void {
     if (this.data === null || chunk < 0) {
       return;
     }
-    if (this.chunkInflight.has(chunk) || this.chunkCells.has(chunk)) {
-      return;
-    }
-    const failedAt: number | undefined = this.chunkFailedAt.get(chunk);
-    if (failedAt !== undefined && Date.now() - failedAt < CHUNK_RETRY_MS) {
-      return;
-    }
     const gid: number = this.gid;
-    this.chunkInflight.add(chunk);
-    this.fetchChunk(gid, chunk).catch((e: object) => {
-      Logger.error('Detail', `preview chunk failed gid=${gid} chunk=${chunk}: ${e}`);
-      if (this.gid === gid) {
-        this.chunkInflight.delete(chunk);
-        this.chunkFailedAt.set(chunk, Date.now());
-      }
-    });
+    if (PreviewChunkStore.instance.failedRecently(gid, chunk)) {
+      return;
+    }
+    PreviewChunkStore.instance.ensure(gid, chunk, () => this.fetchChunkItems(chunk))
+      .then((chunkData: PreviewChunk) => {
+        if (this.gid === gid) {
+          this.gridSource.apply(chunkData.cells);
+        }
+      })
+      .catch((e: object) => {
+        if (this.gid === gid) {
+          Logger.error('Detail', `preview chunk failed gid=${gid} chunk=${chunk}: ${e}`);
+        }
+      });
   }
 
   /**
-   * 取一块（20 页）的预览格。请求本身失败要抛：调用方要能区分「这块确实没有预览」与「这次没取到」。
+   * 取一块（20 页）的预览项。请求本身失败要抛：调用方要能区分「这块确实没有预览」与「这次没取到」。
+   * 转 `PreviewCell` 与 pToken 入库由 `PreviewChunkStore` 统一做（阅读器读 token 时也走同一份）。
    */
-  private async fetchChunkCells(chunk: number): Promise<PreviewCell[]> {
+  private async fetchChunkItems(chunk: number): Promise<PreviewItem[]> {
     const d: GalleryDetail | null = this.data;
     if (d === null) {
       throw new Error('detail not ready');
@@ -583,63 +576,16 @@ export struct GalleryDetailPage {
     const client: EhClient = await this.ensurePreviewClient();
     const items: PreviewItem[] = await client.getPreviews(this.settings.site, d.gid, d.token, chunk);
     if (this.gid !== gid) {
-      // 中途换了画廊：不能把这份结果当成「没有预览」落进缓存 / done。
+      // 中途换了画廊：不能把这份结果当成「没有预览」落进缓存。
       throw new Error('gallery changed');
     }
-    const cells: PreviewCell[] = [];
-    for (let i = 0; i < items.length; i++) {
-      const cell: PreviewCell = new PreviewCell();
-      cell.page = items[i].page;
-      cell.url = items[i].imageUrl;
-      cell.x = items[i].x;
-      cell.y = items[i].y;
-      cell.w = items[i].w;
-      cell.h = items[i].h;
-      cells.push(cell);
-    }
-    return cells;
+    return items;
   }
 
-  /** 网格与跳页条带共用的块入口：先命中缓存，再复用同块的 in-flight promise（同一块不发两次）。 */
+  /** 网格与跳页条带共用的块入口：缓存 / 单飞 / 冷却全部由 `PreviewChunkStore` 负责。 */
   private previewChunk(chunk: number): Promise<PreviewCell[]> {
-    const cached: PreviewCell[] | undefined = this.chunkCells.get(chunk);
-    if (cached !== undefined) {
-      return Promise.resolve(cached);
-    }
-    const running: Promise<PreviewCell[]> | undefined = this.chunkPromises.get(chunk);
-    if (running !== undefined) {
-      return running;
-    }
-    const gid: number = this.gid;
-    const p: Promise<PreviewCell[]> = this.fetchChunkCells(chunk);
-    this.chunkPromises.set(chunk, p);
-    p.then((cells: PreviewCell[]) => {
-      // 只清理自己那一条：切画廊清空后可能有新请求占了同一个 key，别把新的删掉。
-      if (this.chunkPromises.get(chunk) === p) {
-        this.chunkPromises.delete(chunk);
-      }
-      if (this.gid === gid) {
-        this.chunkCells.set(chunk, cells);
-      }
-    }).catch((_e: object) => {
-      if (this.chunkPromises.get(chunk) === p) {
-        this.chunkPromises.delete(chunk);
-      }
-    });
-    return p;
-  }
-
-  private async fetchChunk(gid: number, chunk: number): Promise<void> {
-    const fetched: PreviewCell[] = await this.previewChunk(chunk);
-    if (this.gid !== gid) {
-      return;
-    }
-    this.chunkInflight.delete(chunk);
-    this.chunkFailedAt.delete(chunk);
-    if (fetched.length > 0) {
-      this.gridSource.apply(fetched);
-    }
-    // 空数组 = 这块确实没有预览（请求本身成功）：`previewChunk` 已把它写进块缓存，`ensureChunk` 不会再打。
+    return PreviewChunkStore.instance.ensure(this.gid, chunk,
+      () => this.fetchChunkItems(chunk)).then((chunkData: PreviewChunk) => chunkData.cells);
   }
 
   /** 打开跳页半模态（与收藏/下载共用一个 `bindSheet`，见 `sheetKind`）。 */
@@ -670,6 +616,9 @@ export struct GalleryDetailPage {
 
   /** 底部动作条收放：向下滚（且已过标题区）收起，向上滚立刻回来。 */
   private refreshBar(y: number): void {
+    if (this.suppressBar) {
+      return;
+    }
     const dy: number = y - this.lastScrollY;
     if (Math.abs(dy) < BAR_HIDE_DELTA) {
       return;
@@ -682,6 +631,28 @@ export struct GalleryDetailPage {
     } else if (this.barHidden) {
       this.barHidden = false;
     }
+  }
+
+  /**
+   * 跳页条带停稳后的跟随：只滚一次，不参与拖动中的过程。
+   * 行号 = 页号 / 列数；列表第 0 项是头部，所以 +1。
+   * 往前退一行再按 START 定位：目标行会落在标题栏下方一行，避免贴视口顶被标题栏盖住
+   * （实测行高 250–550px，都大于标题栏露出的遮挡高度）。
+   */
+  private onJumpPage(page: number): void {
+    if (this.data === null || this.gridSource.totalCount() <= 0) {
+      return;
+    }
+    const row: number = rowOfPage(page, this.gridSource.columns);
+    const lastRow: number = this.gridSource.totalCount() - 1;
+    const item: number = Math.max(0, Math.min(row, lastRow)) + 1;
+    this.suppressBar = true;
+    this.scroller.scrollToIndex(Math.max(1, item - 1), false, ScrollAlign.START);
+    setTimeout(() => {
+      this.suppressBar = false;
+      // 同步基准：否则下一次 `onDidScroll` 会拿「跳页前的偏移」算出一个巨大的 dy。
+      this.lastScrollY = this.scroller.currentOffset().yOffset;
+    }, 50);
   }
 
   /**
@@ -878,6 +849,7 @@ export struct GalleryDetailPage {
           initialPage: this.progressPage >= 0 ? this.progressPage : 0,
           loadChunk: (chunk: number) => this.previewChunk(chunk),
           spriteOf: (cell: PreviewCell) => this.spriteFor(cell, this.gid),
+          onPageChange: (page: number) => this.onJumpPage(page),
           onPick: (page: number) => {
             // 退场动画走完再进阅读器（见 `pendingJumpPage`）。
             this.pendingJumpPage = page;
@@ -1357,6 +1329,8 @@ export struct GalleryDetailPage {
           ListItem() {
             this.previewRow(row)
           }
+          // 稳定 id 供真机验证/无障碍定位（行首页号）；不影响布局与手势。
+          .id(`preview-row-${row.cells[0].page}`)
         }, (row: PreviewRow, index: number) => `${this.gridSource.generation}:${index}`)
         // 尾项：底部安全区（动作条背板不会压住最后一行预览）。
         ListItem() {

@@ -68,3 +68,9 @@ export function prefetchChunks(start: number, end: number, totalPages: number,
 export function centerSideOffset(viewportW: number, cellW: number): number {
   return Math.max(0, (viewportW - cellW) / 2);
 }
+
+/** 页号 → 网格行号（列数非法时按 1 列处理，调用方仍会 clamp 到总行数）。 */
+export function rowOfPage(page: number, columns: number): number {
+  const cols: number = columns > 0 ? columns : 1;
+  return Math.floor(Math.max(0, page) / cols);
+}

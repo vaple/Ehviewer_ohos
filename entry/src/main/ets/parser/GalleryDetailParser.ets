@@ -268,7 +268,9 @@ export class GalleryDetailParser {
 
   /**
    * 预览项（`#gdt > a`：href 取 `/s/<pToken>/<gid>-<page>`，首子 div `style` 取 `url()` 缩略图）。
-   * 任一步缺失跳过该项；`#gdt` 缺失回 `[]`。`page` 转内部 0 起。
+   * 几何缺失时保留 token-only 项（`imageUrl` 空，UI 显示页码占位）：阅读器分块 pToken 与缩略图
+   * 来自同一份 items，不能让一个正则没匹配上的裁剪样式把整页 token 丢掉。`#gdt` 缺失回 `[]`。
+   * `page` 转内部 0 起。
    */
   static parsePreviews(html: string, gid: number): PreviewItem[] {
     const items: PreviewItem[] = [];
@@ -292,34 +294,34 @@ export class GalleryDetailParser {
       if (isNaN(page) || page <= 0) {
         continue;
       }
+      let imageUrl: string = '';
+      let x: number = 0;
+      let y: number = 0;
+      let w: number = 0;
+      let h: number = 0;
       const divs: HtmlNode[] = Html.select(anchors[i], 'div');
-      if (divs.length === 0) {
-        continue;
+      if (divs.length > 0) {
+        const style: string | null = Html.attr(divs[0], 'style');
+        if (style !== null) {
+          const img: RegExpMatchArray | null = style.match(PREVIEW_IMG);
+          const box: RegExpMatchArray | null = style.match(PREVIEW_BOX);
+          const off: RegExpMatchArray | null = style.match(PREVIEW_OFF);
+          if (img !== null && box !== null && off !== null) {
+            const bw: number = Number.parseInt(box[1], 10);
+            const bh: number = Number.parseInt(box[2], 10);
+            const bx: number = Math.abs(Number.parseInt(off[1], 10));
+            const by: number = Math.abs(Number.parseInt(off[2], 10));
+            if (!isNaN(bw) && !isNaN(bh) && bw > 0 && bh > 0 && !isNaN(bx) && !isNaN(by)) {
+              imageUrl = img[1];
+              x = bx;
+              y = by;
+              w = bw;
+              h = bh;
+            }
+          }
+        }
       }
-      const style: string | null = Html.attr(divs[0], 'style');
-      if (style === null) {
-        continue;
-      }
-      const img: RegExpMatchArray | null = style.match(PREVIEW_IMG);
-      if (img === null) {
-        continue;
-      }
-      const box: RegExpMatchArray | null = style.match(PREVIEW_BOX);
-      const off: RegExpMatchArray | null = style.match(PREVIEW_OFF);
-      if (box === null || off === null) {
-        continue;
-      }
-      const w: number = Number.parseInt(box[1], 10);
-      const h: number = Number.parseInt(box[2], 10);
-      if (isNaN(w) || isNaN(h) || w <= 0 || h <= 0) {
-        continue;
-      }
-      const x: number = Math.abs(Number.parseInt(off[1], 10));
-      const y: number = Math.abs(Number.parseInt(off[2], 10));
-      if (isNaN(x) || isNaN(y)) {
-        continue;
-      }
-      items.push({ page: page - 1, pToken: m[1], imageUrl: img[1], x: x, y: y, w: w, h: h });
+      items.push({ page: page - 1, pToken: m[1], imageUrl: imageUrl, x: x, y: y, w: w, h: h });
     }
     return items;
   }

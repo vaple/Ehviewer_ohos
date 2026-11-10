@@ -37,9 +37,13 @@ export struct JumpSheet {
   /** 取格子成品缩略图（父组件注入：走 `PreviewSpriteCache`）。 */
   @Require @Param spriteOf: (cell: PreviewCell) => Promise<image.PixelMap | null>;
   @Event onPick: (page: number) => void = (_page: number) => {};
+  /** 停稳后的目标页（0 起实际页）：详情页据此把预览网格滚到对应行。 */
+  @Event onPageChange: (page: number) => void = (_page: number) => {};
 
   /** 目标页（0 起）。 */
   @Local page: number = 0;
+  /** 上一次已通知详情页的页（去重：`onScrollStop` 与 `applyPage` 可能先后到达）。 */
+  private lastEmitted: number = -1;
   /** 输入框文本（允许中途是非法/超范围值，提交时才收敛）。 */
   @Local pageText: string = '1';
   /** 提示行：有块在飞 → 载入中；仍有失败块 → 一句人话；否则空。 */
@@ -72,6 +76,7 @@ export struct JumpSheet {
 
   aboutToAppear(): void {
     this.page = this.clamp(this.initialPage);
+    this.lastEmitted = this.page;
     this.pageText = `${this.page + 1}`;
     this.source = new PreviewStripSource(this.pages);
     // 首屏不能先给一片灰：打开就取中心块，不等防抖。
@@ -239,6 +244,16 @@ export struct JumpSheet {
     if (!moved) {
       this.scheduleSettle();
     }
+    this.emitPage();
+  }
+
+  /** 停稳通知（只在用户动作结束时调用）：详情页据此把网格滚到目标行。 */
+  private emitPage(): void {
+    if (this.page === this.lastEmitted) {
+      return;
+    }
+    this.lastEmitted = this.page;
+    this.onPageChange(this.page);
   }
 
   /** 输入框收敛：非数字或超范围不报错，回到上一次的有效页。 */
@@ -379,6 +394,7 @@ export struct JumpSheet {
         this.cancelScrollTimer();
         this.scrolling = false;
         this.programmatic = false;
+        this.emitPage();
         this.scheduleSettle();
       })
     }

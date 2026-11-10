@@ -20,6 +20,7 @@ import { BundleStorage, CacheManager } from '../service/CacheManager';
 import { formatBytes } from '../common/Bytes';
 import { DiagLog, statsSummary } from '../service/DiagLog';
 import { ExportMeta, LogExport } from '../service/LogExport';
+import { PreviewChunkStore } from '../service/PreviewChunkStore';
 import { VERSION_NAME } from 'BuildProfile';
 import { clampPrefetch, PREFETCH_MAX, PREFETCH_MIN } from '../reader/PrefetchPlan';
 import { navTitleBarStyle } from './NavStyle';
@@ -185,6 +186,8 @@ export struct SettingsPage {
     await store.flush();
     // 登录态变了：详情缓存里存的是上一个账号（或游客）看到的收藏/评分状态，必须清掉。
     sharedDetailCache.clear();
+    // 预览块里的 pToken / 缩略图 URL 也绑定当前会话，换号后不能继续用。
+    PreviewChunkStore.instance.reset();
     this.session.loggedIn = store.has('ipb_member_id');
     if (!silent) {
       this.message = '已保存 Cookie';

@@ -1,6 +1,6 @@
 import { describe, it, expect } from '@ohos/hypium';
 import {
-  chunkOfPage, chunksInRange, prefetchChunks, centerSideOffset
+  chunkOfPage, chunksInRange, prefetchChunks, centerSideOffset, rowOfPage
 } from '../../main/ets/common/JumpStrip';
 
 export default function jumpStripTest() {
@@ -44,6 +44,14 @@ export default function jumpStripTest() {
     it('centerSideOffset_leaves_room_to_center_first_and_last', 0, () => {
       expect(centerSideOffset(360, 78)).assertEqual(141);
       expect(centerSideOffset(60, 78)).assertEqual(0);
+    });
+
+    it('rowOfPage_groups_by_columns', 0, () => {
+      expect(rowOfPage(0, 3)).assertEqual(0);
+      expect(rowOfPage(2, 3)).assertEqual(0);
+      expect(rowOfPage(3, 3)).assertEqual(1);
+      expect(rowOfPage(999, 3)).assertEqual(333);
+      expect(rowOfPage(5, 0)).assertEqual(5);
     });
   });
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from '@ohos/hypium';
-import { ReadingDirection, toDisplayIndex, toPage, resolveStartPage } from '../../main/ets/reader/ReaderMode';
+import { ReadingDirection, toDisplayIndex, toPage, resolveStartPage, scrubTargetPage } from '../../main/ets/reader/ReaderMode';
 
 export default function readerModeTest() {
   describe('ReaderMode', () => {
@@ -22,6 +22,13 @@ export default function readerModeTest() {
       expect(resolveStartPage(37, 37)).assertEqual(0);
       expect(resolveStartPage(99, 37)).assertEqual(0);
       expect(resolveStartPage(5, 0)).assertEqual(0);
+    });
+
+    it('scrub_target_page_maps_display_index', 0, () => {
+      expect(scrubTargetPage(3, 10, ReadingDirection.LTR)).assertEqual(3);
+      expect(scrubTargetPage(3, 10, ReadingDirection.RTL)).assertEqual(6);
+      expect(scrubTargetPage(3, 10, ReadingDirection.VERTICAL)).assertEqual(3);
+      expect(scrubTargetPage(0, 0, ReadingDirection.RTL)).assertEqual(-1);
     });
   });
 }

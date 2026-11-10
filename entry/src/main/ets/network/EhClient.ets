@@ -312,8 +312,10 @@ export class EhClient {
   }
 
   /**
-   * 取某个**预览分块**的 pToken（按绝对页号 - 1 入数组），用于任意跳页。
+   * 取某个**预览分块**的 pToken（按绝对页号 - 1 入数组）。
    * 分块 URL：`/g/<gid>/<token>/?p=<chunk>`（每块 20 页，`chunk` 从 0 开始）。
+   * 阅读器/详情走 `PreviewChunkStore`（同时拿缩略图）；这里保留给**下载**：
+   * 下载队列可能同时跑多个画廊，不能共用「同一时刻只缓存一个 gid」的 store。
    */
   async getPreviewTokens(site: EhSite, gid: number, token: string, chunk: number): Promise<string[]> {
     const headers: Record<string, string> = { 'Referer': EhUrl.referer(site) };
@@ -330,7 +332,8 @@ export class EhClient {
 
   /**
    * 取某个**预览分块**的预览项（含缩略图，用于详情预览区追加）。
-   * 同 `getPreviewTokens` 的 URL，仅解析多取 `imageUrl`。
+   * 分块 URL：`/g/<gid>/<token>/?p=<chunk>`（每块 20 页，`chunk` 从 0 开始）；
+   * 块 HTML 同时带 pToken，`PreviewChunkStore` 会一并解析。
    */
   async getPreviews(site: EhSite, gid: number, token: string, chunk: number): Promise<PreviewItem[]> {
     const headers: Record<string, string> = { 'Referer': EhUrl.referer(site) };

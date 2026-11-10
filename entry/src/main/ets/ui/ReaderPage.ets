@@ -1,4 +1,5 @@
 import { common } from '@kit.AbilityKit';
+import { image } from '@kit.ImageKit';
 import { AppStorageV2, CapsuleSegmentButtonV2, PersistenceV2, SegmentButtonV2Items, window } from '@kit.ArkUI';
 import { systemShare } from '@kit.ShareKit';
 import { uniformTypeDescriptor } from '@kit.ArkData';
@@ -9,11 +10,16 @@ import { EhClient } from '../network/EhClient';
 import { GalleryDetail } from '../model/GalleryDetail';
 import { GalleryPageResult } from '../parser/GalleryPageParser';
 import { DetailParam } from '../model/DetailParam';
-import { ReadingDirection, resolveStartPage, toDisplayIndex, toPage } from '../reader/ReaderMode';
+import { ReadingDirection, resolveStartPage, scrubTargetPage, toDisplayIndex, toPage } from '../reader/ReaderMode';
 import { clampPrefetch, neighbors, range } from '../reader/PrefetchPlan';
 import { TokenChunks } from '../reader/TokenChunks';
 import { applyPinch, nextDoubleTapScale, clampOffset, ZOOM_MIN, ZOOM_MAX } from '../reader/ZoomModel';
 import { ImageStore } from '../service/ImageStore';
+import { PreviewSpriteCache } from '../service/PreviewSpriteCache';
+import { PreviewChunk, PreviewChunkStore } from '../service/PreviewChunkStore';
+import { PreviewCell } from '../model/PreviewCell';
+import { JumpStripCell } from './JumpStripCell';
+import { chunkOfPage, chunksInRange } from '../common/JumpStrip';
 import { PhotoSaver } from '../service/PhotoSaver';
 import { downloadManager } from '../service/DownloadManager';
 import { DownloadItem } from '../model/DownloadRecord';
@@ -89,6 +95,14 @@ export struct ReaderPage {
   private static readonly TAP_SLOP: number = 10;
   /** 放大后单指平移手势的 tag：未放大时在 `onGestureJudgeBegin` 里拒绝它，把拖动让给 Swiper。 */
   private static readonly ZOOM_PAN_TAG: string = 'reader-zoom-pan';
+  /** 拖动胶片条：停稳 120ms 才取图；格宽上限 / 宽高比 / 间隙 / 内边距（与跳跃条带同节拍）。 */
+  private static readonly SCRUB_SETTLE_MS: number = 120;
+  private static readonly FILM_CELL_MAX_W: number = 78;
+  private static readonly FILM_H_RATIO: number = 110 / 78;
+  private static readonly FILM_GAP: number = 8;
+  private static readonly FILM_PAD: number = 6;
+  /** 格子下方页码行的高度（vp，10fp 字号；和 `JumpStripCell` 的占位/真图同高）。 */
+  private static readonly FILM_TEXT_H: number = 16;
 
   @Local settings: AppSettings = PersistenceV2.globalConnect({
     type: AppSettings,
@@ -113,6 +127,23 @@ export struct ReaderPage {
   @Local currentPage: number = 0;
   /** 进度条拖动中的目标页（`-1` = 未拖动；拖动时左下角实时显示这一页）。 */
   @Local scrubPage: number = -1;
+  /** 拖动胶片条的 5 格窗口（固定 5 槽；`page = -1` = 首/尾空槽，目标永远 index 2）。 */
+  @Local filmCells: PreviewCell[] = [];
+  /** 拖动缩略图：成品 PixelMap（私有 + ready 标记，沿 `PreviewCropCell` 的写法，别把 PixelMap 放进 @Local）/ 本地整页图兜底 / 滑杆容器宽度。 */
+  private scrubThumbPm: image.PixelMap | null = null;
+  @Local scrubThumbReady: boolean = false;
+  @Local scrubThumbPage: number = -1;
+  @Local scrubThumbUrl: string = '';
+  @Local scrubBarW: number = 0;
+  /** 底栏实测高度（vp）：胶片条挂在底栏上方的页面级 Stack 里，靠它定位。 */
+  @Local bottomBarH: number = 0;
+  /** 当前持有的精灵图缓存键（换页/退出时 release）。 */
+  private scrubThumbKey: string = '';
+  /** 停稳取图定时器（`-1` = 没有待触发）。 */
+  private scrubTimer: number = -1;
+  /** 取图代际：拖动/松手后作废在飞结果。 */
+  private scrubGen: number = 0;
+  private scrubCache: PreviewSpriteCache = new PreviewSpriteCache();
   /** 转屏锁定（看完即走，不落盘；退出阅读恢复跟随系统）。 */
   @Local orientationLocked: boolean = false;
   /** 常亮开关（`init` 即开，退出关；sheet 内可手动开关）。 */
@@ -326,6 +357,8 @@ export struct ReaderPage {
         this.total = detail.pages;
       }
       this.tokenChunks.seed(detail.previewTokens);
+      // 详情首块自带缩略图：种进共享块缓存，拖动进度条到前 20 页时零请求出图。
+      PreviewChunkStore.instance.seed(this.gid, 0, detail.previews);
       if (this.total <= 0) {
         Logger.error('Reader', `no pages gid=${this.gid}`);
         this.message = '没有可阅读的页面';
@@ -395,10 +428,13 @@ export struct ReaderPage {
     return await this.tokenChunks.ensure(page);
   }
 
-  /** 拉某个预览分块的 pToken（`ensureClient()` 保证 client 就绪）。 */
+  /** 拉某个预览分块的 pToken；与缩略图共用 `PreviewChunkStore`，同一块只发一条请求。 */
   private async loadChunkTokens(chunk: number): Promise<string[]> {
     const client: EhClient = await this.ensureClient();
-    return client.getPreviewTokens(this.site, this.gid, this.token, chunk);
+    const gid: number = this.gid;
+    const chunkData: PreviewChunk = await PreviewChunkStore.instance.ensure(gid, chunk,
+      () => client.getPreviews(this.site, gid, this.token, chunk));
+    return chunkData.tokens;
   }
 
   private async loadPage(page: number, focus: boolean = true): Promise<void> {
@@ -602,6 +638,239 @@ export struct ReaderPage {
     this.controller.changeIndex(v);
     this.generation += 1;
     this.loadPage(toPage(v, this.total, this.settings.readerDirection));
+  }
+
+  /** 滑杆显示索引 → 实际页号；未拖动 / 无页返回 -1。 */
+  private scrubTarget(): number {
+    if (this.scrubPage < 0 || this.total <= 0) {
+      return -1;
+    }
+    return scrubTargetPage(this.scrubPage, this.total, this.settings.readerDirection);
+  }
+
+  /** 取消待触发的停稳取图，并让在飞结果作废。 */
+  private cancelScrubThumb(): void {
+    if (this.scrubTimer >= 0) {
+      clearTimeout(this.scrubTimer);
+      this.scrubTimer = -1;
+    }
+    this.scrubGen += 1;
+  }
+
+  /** 拖动停稳 120ms 后才取目标块（与跳页条带同一节拍）。 */
+  private scheduleScrubThumb(): void {
+    this.cancelScrubThumb();
+    const gen: number = this.scrubGen;
+    this.scrubTimer = setTimeout(() => {
+      this.scrubTimer = -1;
+      this.loadScrubThumb(gen).catch((e: object) => {
+        Logger.error('Reader', `scrub thumb failed: ${e}`);
+      });
+    }, ReaderPage.SCRUB_SETTLE_MS);
+  }
+
+  /** 取目标页缩略图：先填 5 格窗口，再给中间格取 sprite → 本地整页图 → 窗口块。 */
+  private async loadScrubThumb(gen: number): Promise<void> {
+    const page: number = this.scrubTarget();
+    // total 在系统栏切完 / 详情回来后可能变化：越界的旧 scrubPage 不能索引 images。
+    if (page < 0 || page >= this.total || page >= this.images.length) {
+      return;
+    }
+    this.fillFilmCells();
+    const chunk: number = chunkOfPage(page);
+    let cell: PreviewCell | undefined = this.findPreviewCell(
+      PreviewChunkStore.instance.peek(this.gid, chunk), page);
+    if (cell === undefined) {
+      const local: string = this.images[page].url;
+      if (local.length > 0) {
+        if (gen === this.scrubGen && this.scrubPage >= 0 && this.scrubTarget() === page) {
+          this.showScrubUrl(page, local);
+          Logger.info('Reader', `scrub thumb page=${page + 1} source=local`);
+        }
+        return;
+      }
+      // 冷却中的块直接跳过：不重复发请求，也不重复打日志（与详情网格同口径）。
+      if (PreviewChunkStore.instance.failedRecently(this.gid, chunk)) {
+        return;
+      }
+      const client: EhClient = await this.ensureClient();
+      // 窗口覆盖的块（最多 3 块）一起取：左右格跨块时也不空窗；同块由 store single-flight。
+      const pages: number[] = this.filmPages();
+      let minPage: number = page;
+      let maxPage: number = page;
+      for (let i = 0; i < pages.length; i++) {
+        if (pages[i] < minPage) {
+          minPage = pages[i];
+        }
+        if (pages[i] > maxPage) {
+          maxPage = pages[i];
+        }
+      }
+      const chunkIds: number[] = chunksInRange(minPage, maxPage, this.total);
+      const tasks: Promise<PreviewChunk>[] = [];
+      for (let i = 0; i < chunkIds.length; i++) {
+        const c: number = chunkIds[i];
+        if (PreviewChunkStore.instance.failedRecently(this.gid, c)) {
+          continue;
+        }
+        tasks.push(PreviewChunkStore.instance.ensure(this.gid, c,
+          () => client.getPreviews(this.site, this.gid, this.token, c)));
+      }
+      await Promise.all(tasks);
+      if (gen !== this.scrubGen || this.scrubPage < 0 || this.scrubTarget() !== page) {
+        return;
+      }
+      this.fillFilmCells();
+      cell = this.findPreviewCell(PreviewChunkStore.instance.peek(this.gid, chunk), page);
+    }
+    if (cell === undefined || cell.url.length === 0) {
+      return;
+    }
+    if (gen !== this.scrubGen || this.scrubPage < 0) {
+      return;
+    }
+    const client: EhClient = await this.ensureClient();
+    const key: string = PreviewSpriteCache.keyOf(cell.url, cell.x, cell.y, cell.w, cell.h);
+    let pm: image.PixelMap;
+    try {
+      pm = await this.scrubCache.acquire(this.context(), client,
+        EhUrl.referer(this.site), cell.url, cell.x, cell.y, cell.w, cell.h);
+    } catch (e) {
+      // 精灵图失败（离线 / 限流）：退回本地整页图，别让已缓存的页卡在占位。
+      Logger.error('Reader', `scrub sprite failed page=${page + 1}: ${e}`);
+      if (gen === this.scrubGen && this.scrubPage >= 0 && this.scrubTarget() === page) {
+        const local: string = this.images[page].url;
+        if (local.length > 0) {
+          this.showScrubUrl(page, local);
+          Logger.info('Reader', `scrub thumb page=${page + 1} source=local-fallback`);
+        }
+      }
+      return;
+    }
+    if (gen !== this.scrubGen || this.scrubPage < 0 || this.scrubTarget() !== page) {
+      PreviewSpriteCache.release(key);
+      return;
+    }
+    this.releaseScrubThumb();
+    this.scrubThumbKey = key;
+    this.scrubThumbPm = pm;
+    this.scrubThumbReady = true;
+    this.scrubThumbPage = page;
+    this.scrubThumbUrl = '';
+    Logger.info('Reader', `scrub thumb page=${page + 1} source=sprite`);
+  }
+
+  /** 5 格窗口覆盖的实际页（不含首尾空槽）。 */
+  private filmPages(): number[] {
+    const pages: number[] = [];
+    if (this.scrubPage < 0 || this.total <= 0) {
+      return pages;
+    }
+    for (let i = -2; i <= 2; i++) {
+      const display: number = this.scrubPage + i;
+      if (display < 0 || display >= this.total) {
+        continue;
+      }
+      pages.push(scrubTargetPage(display, this.total, this.settings.readerDirection));
+    }
+    return pages;
+  }
+
+  /** 重建 5 格窗口：目标固定 index 2；首尾越界留空槽（page = -1）；值只来自 store 缓存。 */
+  private fillFilmCells(): void {
+    if (this.scrubPage < 0 || this.total <= 0) {
+      this.filmCells = [];
+      return;
+    }
+    const cells: PreviewCell[] = [];
+    for (let i = -2; i <= 2; i++) {
+      const display: number = this.scrubPage + i;
+      if (display < 0 || display >= this.total) {
+        const empty: PreviewCell = new PreviewCell();
+        empty.page = -1;
+        cells.push(empty);
+        continue;
+      }
+      const page: number = scrubTargetPage(display, this.total, this.settings.readerDirection);
+      const found: PreviewCell | undefined = this.findPreviewCell(
+        PreviewChunkStore.instance.peek(this.gid, chunkOfPage(page)), page);
+      if (found !== undefined) {
+        cells.push(found);
+      } else {
+        const placeholder: PreviewCell = new PreviewCell();
+        placeholder.page = page;
+        cells.push(placeholder);
+      }
+    }
+    this.filmCells = cells;
+  }
+
+  /** 左右格的精灵图（`PreviewCropCell` 负责引用计数；失败返回 null 并记日志）。 */
+  private async scrubSprite(cell: PreviewCell): Promise<image.PixelMap | null> {
+    if (cell.url.length === 0) {
+      return null;
+    }
+    try {
+      const client: EhClient = await this.ensureClient();
+      return await this.scrubCache.acquire(this.context(), client, EhUrl.referer(this.site),
+        cell.url, cell.x, cell.y, cell.w, cell.h);
+    } catch (e) {
+      Logger.error('Reader', `scrub sprite failed page=${cell.page + 1}: ${e}`);
+      return null;
+    }
+  }
+
+  /** 在块里找目标页（`PreviewCell.url` 为空视为没有预览）。 */
+  private findPreviewCell(chunk: PreviewChunk | undefined, page: number): PreviewCell | undefined {
+    if (chunk === undefined) {
+      return undefined;
+    }
+    for (let i = 0; i < chunk.cells.length; i++) {
+      if (chunk.cells[i].page === page && chunk.cells[i].url.length > 0) {
+        return chunk.cells[i];
+      }
+    }
+    return undefined;
+  }
+
+  /** 本地整页图兜底（已下载 / 已缓存）：先释放旧精灵图引用。 */
+  private showScrubUrl(page: number, url: string): void {
+    this.releaseScrubThumb();
+    this.scrubThumbPm = null;
+    this.scrubThumbReady = false;
+    this.scrubThumbPage = page;
+    this.scrubThumbUrl = url;
+  }
+
+  /** 释放当前精灵图引用（键为空时无操作）。 */
+  private releaseScrubThumb(): void {
+    if (this.scrubThumbKey.length > 0) {
+      PreviewSpriteCache.release(this.scrubThumbKey);
+      this.scrubThumbKey = '';
+    }
+  }
+
+  private clearScrubThumb(): void {
+    this.releaseScrubThumb();
+    this.scrubThumbPm = null;
+    this.scrubThumbReady = false;
+    this.scrubThumbPage = -1;
+    this.scrubThumbUrl = '';
+  }
+
+  /** 格宽按容器算：min(78, (bar - 4*gap - 2*pad) / 5)，不按机型写死。 */
+  private filmCellW(): number {
+    const available: number = this.scrubBarW > 0 ? this.scrubBarW : 320;
+    const raw: number = (available - 4 * ReaderPage.FILM_GAP - 2 * ReaderPage.FILM_PAD) / 5;
+    return Math.max(40, Math.min(ReaderPage.FILM_CELL_MAX_W, raw));
+  }
+
+  private filmCellH(): number {
+    return this.filmCellW() * ReaderPage.FILM_H_RATIO;
+  }
+
+  private filmSlotH(): number {
+    return this.filmCellH() + ReaderPage.FILM_TEXT_H;
   }
 
   /** 存图的目标页：横向按显示索引映射；纵向用锚点页（`currentPage` 会被漂移改写，不能用）。 */
@@ -954,38 +1223,53 @@ export struct ReaderPage {
       }
       // 进度条**故意保持单向**（不用 `$$`/`!!`）：连续双向写会让 `Swiper` 在拖动过程中
       // 逐页动画+加载；这里只在 `End`/`Click` 时提交一次（官方对"松开才生效"的常规做法）。
-      Slider({
-        value: this.settings.readerDirection === ReadingDirection.VERTICAL ? this.currentPage : this.index,
-        min: 0,
-        max: this.total - 1,
-        step: 1
-      })
-        .width('100%')
-        .onChange((value: number, mode: SliderChangeMode) => {
-          const v: number = Math.round(value);
-          if (mode === SliderChangeMode.Begin || mode === SliderChangeMode.Moving) {
-            // 拖动中只更新左下角数字（不加载、不跳页）：松开才提交。
-            this.scrubPage = v;
-            return;
-          }
-          if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-            this.scrubPage = -1;
-            if (this.settings.readerDirection === ReadingDirection.VERTICAL) {
-              // 进度条是"用户明确选页"的动作：程序化 `scrollToIndex` 不触发 `onScrollStart`，
-              // 所以这里显式改锚 + 保存，不能只依赖滚动回调。
-              this.anchorPage = v;
-              this.reanchorBudget = 40;
-              this.progress.save(this.gid, v);
-              this.listScroller.scrollToIndex(v);
-            } else {
-              this.jumpTo(v);
-            }
-          }
+      Stack({ alignContent: Alignment.TopStart }) {
+        Slider({
+          value: this.settings.readerDirection === ReadingDirection.VERTICAL ? this.currentPage : this.index,
+          min: 0,
+          max: this.total - 1,
+          step: 1
         })
+          .width('100%')
+          .onChange((value: number, mode: SliderChangeMode) => {
+            const v: number = Math.round(value);
+            if (mode === SliderChangeMode.Begin || mode === SliderChangeMode.Moving) {
+              // 拖动中只跟手 + 重建 5 格窗口（只用已缓存 cells），停稳 120ms 才取块。
+              this.scrubPage = v;
+              this.fillFilmCells();
+              this.scheduleScrubThumb();
+              return;
+            }
+            if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+              this.cancelScrubThumb();
+              this.scrubPage = -1;
+              this.clearScrubThumb();
+              this.filmCells = [];
+              if (this.settings.readerDirection === ReadingDirection.VERTICAL) {
+                // 进度条是"用户明确选页"的动作：程序化 `scrollToIndex` 不触发 `onScrollStart`，
+                // 所以这里显式改锚 + 保存，不能只依赖滚动回调。
+                this.anchorPage = v;
+                this.reanchorBudget = 40;
+                this.progress.save(this.gid, v);
+                this.listScroller.scrollToIndex(v);
+              } else {
+                this.jumpTo(v);
+              }
+            }
+          })
+      }
+      .width('100%')
+      .clip(false)
+      .onAreaChange((_old: Area, now: Area) => {
+        const w: number = Number(now.width);
+        if (w !== this.scrubBarW) {
+          this.scrubBarW = w;
+        }
+      })
       Row({ space: 8 }) {
-        // 页码是确定性的：分母来自详情（`DetailParam.pages`），拖动时显示目标页。
+        // 页码是确定性的：分母来自详情（`DetailParam.pages`）；拖动时按实际页显示（RTL 也一致）。
         Text(this.scrubPage >= 0
-          ? `${this.scrubPage + 1} / ${this.total}`
+          ? `${this.scrubTarget() + 1} / ${this.total}`
           : `${this.displayPage() + 1} / ${this.total}`)
           .fontSize(12)
           .fontColor($r('app.color.text_secondary'))
@@ -1135,7 +1419,75 @@ export struct ReaderPage {
             this.bottomBar()
           }
           .width('100%')
+          .onAreaChange((_old: Area, now: Area) => {
+            const h: number = Number(now.height);
+            if (h !== this.bottomBarH) {
+              this.bottomBarH = h;
+            }
+          })
           .transition(TransitionEffect.OPACITY.animation({ duration: 200, curve: Curve.EaseInOut }))
+        }
+        // 拖动胶片条：5 格、目标固定 index 2；首尾缺页留空槽。挂在页面级 Stack，避免父容器裁剪。
+        if (this.total > 0 && this.chromeShown && this.scrubPage >= 0
+          && this.filmCells.length === 5) {
+          Row({ space: ReaderPage.FILM_GAP }) {
+            ForEach(this.filmCells, (cell: PreviewCell, index: number) => {
+              if (index === 2) {
+                // 中间格：目标页；高亮边框；保留本地整页图兜底。
+                Column({ space: 2 }) {
+                  if (this.scrubThumbReady && this.scrubThumbPage === this.scrubTarget()
+                    && this.scrubThumbPm !== null) {
+                    Image(this.scrubThumbPm)
+                      .width('100%')
+                      .height(this.filmCellH())
+                      .objectFit(ImageFit.Cover)
+                      .borderRadius(6)
+                  } else if (this.scrubThumbUrl.length > 0
+                    && this.scrubThumbPage === this.scrubTarget()) {
+                    Image(this.scrubThumbUrl)
+                      .width('100%')
+                      .height(this.filmCellH())
+                      .objectFit(ImageFit.Cover)
+                      .borderRadius(6)
+                  } else {
+                    Column()
+                      .width('100%')
+                      .height(this.filmCellH())
+                      .borderRadius(6)
+                      .backgroundColor($r('app.color.bg_secondary'))
+                  }
+                  Text(`${this.scrubTarget() + 1}`)
+                    .fontSize(10)
+                    .fontColor($r('app.color.text_primary'))
+                    .maxLines(1)
+                }
+                .width(this.filmCellW())
+                // 目标格靠“居中位置 + 页码 + 底栏 X / N”标识；不套边框：边框会随 ForEach 重建闪，
+                // 且 padding/border 让中间格比邻格宽 6vp。
+              } else if (cell.page >= 0) {
+                JumpStripCell({
+                  cell: cell,
+                  cellW: this.filmCellW(),
+                  cellH: this.filmCellH(),
+                  spriteOf: (c: PreviewCell) => this.scrubSprite(c)
+                })
+              } else {
+                // 首/尾缺页：同宽同高空槽，目标格仍居中。
+                Column()
+                  .width(this.filmCellW())
+                  .height(this.filmSlotH())
+              }
+            }, (cell: PreviewCell, index: number) =>
+              cell.page >= 0 ? `p${cell.page}:${cell.url}` : `e${index}`)
+          }
+          .padding(ReaderPage.FILM_PAD)
+          .borderRadius(14)
+          // 内容区浮层拿不到系统材质（ui/AGENTS.md #67）。
+          .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THICK)
+          .hitTestBehavior(HitTestMode.None)
+          .id('reader-scrub-film')
+          .margin({ bottom: this.bottomBarH + ReaderPage.FILM_GAP })
+          .transition(TransitionEffect.OPACITY.animation({ duration: 120, curve: Curve.EaseInOut }))
         }
       }
       .width('100%')
@@ -1170,6 +1522,9 @@ export struct ReaderPage {
     // 退出阅读即恢复窗口状态（常亮关、全屏退），不影响其他页面。
     // 先取消待触发的单击切换：否则 280ms 内退出会让定时器在页外把窗口切进沉浸，且无页面能恢复它。
     .onDisAppear(() => {
+      this.cancelScrubThumb();
+      this.clearScrubThumb();
+      this.filmCells = [];
       this.cancelImmersiveSoon();
       this.setKeepScreenOn(false);
       if (this.immersive) {

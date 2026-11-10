@@ -31,6 +31,8 @@ export struct JumpStripCell {
         .width(this.cellW)
     } else {
       // 未取到：同高灰块 + 页码，滚动不跳变，也让用户知道滚到哪了。
+      // 两个使用面：跳页条带的固定宽 `ListItem`、阅读器胶片条的直接 `Row`；
+      // 根宽必须用自己的 `cellW`，不能写 `100%`（在 Row 里会解析成整条/整屏宽）。
       Column({ space: 2 }) {
         Column()
           .width('100%')
@@ -41,7 +43,7 @@ export struct JumpStripCell {
           .fontSize(10)
           .fontColor($r('app.color.text_secondary'))
       }
-      .width('100%')
+      .width(this.cellW)
     }
   }
 }

@@ -128,15 +128,18 @@ export default function galleryDetailParserTest() {
       expect(items[0].imageUrl).assertEqual('https://ehgt.org/q/w.webp');
     });
 
-    it('parsePreviews_skips_cells_without_geometry', 0, () => {
+    it('parsePreviews_keeps_token_only_cells', 0, () => {
       const html: string = '<div id="gdt">' +
         '<a href="https://e-hentai.org/s/bb9f06e264/9-1"><div style="background:transparent url(https://ehgt.org/q/w.webp)"></div></a>' +
         '<a href="https://e-hentai.org/s/a0113b5a19/9-2"><div style="width:200px; height:100px;background:transparent url(https://ehgt.org/q/v.webp) -0px 0 no-repeat"></div></a></div>';
       const items: PreviewItem[] = GalleryDetailParser.parsePreviews(html, 9);
-      expect(items.length).assertEqual(1);
-      expect(items[0].page).assertEqual(1);
-      expect(items[0].w).assertEqual(200);
-      expect(items[0].h).assertEqual(100);
+      expect(items.length).assertEqual(2);
+      expect(items[0].page).assertEqual(0);
+      expect(items[0].pToken).assertEqual('bb9f06e264');
+      expect(items[0].imageUrl).assertEqual('');
+      expect(items[1].page).assertEqual(1);
+      expect(items[1].w).assertEqual(200);
+      expect(items[1].h).assertEqual(100);
     });
 
     it('missing_title_returns_null', 0, () => {
