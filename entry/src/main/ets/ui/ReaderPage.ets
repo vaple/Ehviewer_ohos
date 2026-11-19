@@ -1254,13 +1254,18 @@ export struct ReaderPage {
         .fontColor($r('app.color.text_primary'))
         .layoutWeight(1)
       // 官方安全控件（图标态）：点击即获媒体库临时授权；圆形与返回/分享同尺寸同底色。
+      // 底色用与两侧**同一个** `reader_btn_bg`：安全控件会把 alpha < 0x1A 的底色强制拉到 0xFF
+      // （SDK `security_component.d.ts` 明文），所以浅色那份取 #1C000000（alpha 0x1C > 0x1A）——
+      // 既保留半透明光感，又不会被系统拉成纯黑方块。
       SaveButton({ icon: SaveIconStyle.LINES, buttonType: ButtonType.Circle })
         .userCancelEvent(true)
         .iconSize(20)
-        .fontColor($r('app.color.text_primary'))
+        .iconColor($r('app.color.text_primary'))
         .width(40)
         .height(40)
         .backgroundColor($r('app.color.reader_btn_bg'))
+        .borderWidth(1)
+        .borderColor($r('app.color.reader_btn_ring'))
         .onClick((event: ClickEvent, result: SaveButtonOnClickResult) => {
           this.onSaveClicked(result);
         })
