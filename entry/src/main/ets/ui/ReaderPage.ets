@@ -1,6 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { image } from '@kit.ImageKit';
-import { AppStorageV2, CapsuleSegmentButtonV2, PersistenceV2, SegmentButtonV2Items, window } from '@kit.ArkUI';
+import { AppStorageV2, CapsuleSegmentButtonV2, PersistenceV2, SegmentButtonV2Items, UIContext, window } from '@kit.ArkUI';
 import { systemShare } from '@kit.ShareKit';
 import { uniformTypeDescriptor } from '@kit.ArkData';
 import { EhSite, EhUrl } from '../network/EhUrl';
@@ -13,7 +13,7 @@ import { DetailParam } from '../model/DetailParam';
 import { ReadingDirection, resolveStartPage, scrubTargetPage, toDisplayIndex, toPage } from '../reader/ReaderMode';
 import { clampPrefetch, neighbors, range } from '../reader/PrefetchPlan';
 import { TokenChunks } from '../reader/TokenChunks';
-import { applyPinch, nextDoubleTapScale, clampOffset, ZOOM_MIN, ZOOM_MAX } from '../reader/ZoomModel';
+import { applyPinch, nextDoubleTapScale, panTranslate, clampOffset, IMMERSIVE_DELAY_MS, ZOOM_MIN, ZOOM_MAX, DOUBLE_TAP_SCALE } from '../reader/ZoomModel';
 import { ImageStore } from '../service/ImageStore';
 import { PreviewSpriteCache } from '../service/PreviewSpriteCache';
 import { PreviewChunk, PreviewChunkStore } from '../service/PreviewChunkStore';
@@ -103,6 +103,8 @@ export struct ReaderPage {
   private static readonly FILM_PAD: number = 6;
   /** 格子下方页码行的高度（vp，10fp 字号；和 `JumpStripCell` 的占位/真图同高）。 */
   private static readonly FILM_TEXT_H: number = 16;
+  /** 双击放大/复位的过渡时长（ms）：只给这两个动作，拖动/捏合必须逐帧跟手。 */
+  private static readonly ZOOM_ANIM_MS: number = 260;
 
   @Local settings: AppSettings = PersistenceV2.globalConnect({
     type: AppSettings,
@@ -163,6 +165,9 @@ export struct ReaderPage {
   private panBaseY: number = 0;
   private viewW: number = 0;
   private viewH: number = 0;
+  /** `ImageFit.Contain` 实际绘制的图片尺寸（vp，来自 `Image.onComplete` 的 `contentWidth/Height`）。 */
+  private contentW: number = 0;
+  private contentH: number = 0;
   /** 页 token：分块取 + 同块并发去重（预取一次并发十几页，常有 4 个挤在同一个 chunk）。 */
   private tokenChunks: TokenChunks = new TokenChunks((chunk: number): Promise<string[]> => {
     return this.loadChunkTokens(chunk);
@@ -178,7 +183,7 @@ export struct ReaderPage {
   private store: ImageStore = new ImageStore();
   private site: EhSite = EhSite.E;
   private controller: SwiperController = new SwiperController();
-  private listScroller: Scroller = new Scroller();
+  private listScroller: ListScroller = new ListScroller();
   private pageStack: NavPathStack | undefined = undefined;
   /** 纵向：列表是否正在滚动（滚动中不做重锚定，避免和用户手势打架）。 */
   private scrolling: boolean = false;
@@ -189,7 +194,6 @@ export struct ReaderPage {
   private anchorPage: number = 0;
   /** 纵向：把视口重新锚回 `anchorPage` 的剩余预算（图片加载完成时用）。 */
   private reanchorBudget: number = 40;
-
   /** 横向 `Swiper` 的显示索引序列（`total` 变才重算）。 */
   @Computed
   get pageIndices(): number[] {
@@ -221,8 +225,8 @@ export struct ReaderPage {
   private lastDoubleTap: number = 0;
 
   /**
-   * 单击切操作栏：延迟 280ms 再执行（标准双击消歧，和 Android 的 double-tap-timeout 同构）。
-   * 若期间来了双击，`cancelImmersiveSoon` 会取消它 —— 单击不会误触，页面也不会闪一下。
+   * 单击切操作栏：延迟 `IMMERSIVE_DELAY_MS` 再执行（标准双击消歧，和 Android 的 double-tap-timeout 同构）。
+   * 若期间来了双击，`cancelImmersiveSoon` 会取消它 —— 单击不会误触（延迟值的约束见常量注释）。
    */
   private toggleImmersiveSoon(): void {
     if (this.scrolling || Date.now() - this.lastDoubleTap < 350) {
@@ -237,7 +241,7 @@ export struct ReaderPage {
       this.chromeShown = !this.chromeShown;
       // 操作栏出现时把状态栏（时间/电量）一起带出来；收起时再藏回去。
       this.setStatusBarVisible(this.chromeShown);
-    }, 280);
+    }, IMMERSIVE_DELAY_MS);
   }
 
   private cancelImmersiveSoon(): void {
@@ -554,6 +558,50 @@ export struct ReaderPage {
     this.panBaseY = 0;
   }
 
+  /**
+   * 平移夹取（屏幕 vp）：可移动范围按 `ImageFit.Contain` 的**实际绘制尺寸**算，不是容器尺寸。
+   * 见 `ZoomModel.clampOffset` 的注释（真机实测：按容器夹取会拖出黑边）。
+   */
+  private clampOffsetX(offset: number, scale: number): number {
+    return clampOffset(offset, this.viewW, this.contentW, scale);
+  }
+
+  private clampOffsetY(offset: number, scale: number): number {
+    return clampOffset(offset, this.viewH, this.contentH, scale);
+  }
+
+  /**
+   * 双击：放大到 `ZOOM_MAX` / 复位到 `ZOOM_MIN`，**带过渡动画**。
+   *
+   * 为什么不能只改 `@Local` 状态：`.scale()` / `.translate()` 没有动画时是瞬变 —— 真机表现就是
+   * "闪现放大"。这里用显式动画 `animateTo`（与列表→详情共享元素转场同一条官方路径），
+   * 只包住双击这一个动作：拖动/捏合仍在手势回调里逐帧改状态，不受影响。
+   */
+  private applyDoubleTap(): void {
+    const next: number = nextDoubleTapScale(this.imgScale, DOUBLE_TAP_SCALE);
+    if (next <= ZOOM_MIN) {
+      this.getUIContext().animateTo({
+        duration: ReaderPage.ZOOM_ANIM_MS, curve: Curve.Friction
+      }, () => {
+        this.imgScale = ZOOM_MIN;
+        this.imgOffsetX = 0;
+        this.imgOffsetY = 0;
+      });
+      return;
+    }
+    // 放大：重置偏移（居中），并把捏合/拖动基准对齐到新比例，否则下一步拖动会从旧基准跳一下。
+    this.getUIContext().animateTo({
+      duration: ReaderPage.ZOOM_ANIM_MS, curve: Curve.Friction
+    }, () => {
+      this.imgScale = next;
+      this.pinchBase = next;
+      this.imgOffsetX = 0;
+      this.imgOffsetY = 0;
+      this.panBaseX = 0;
+      this.panBaseY = 0;
+    });
+  }
+
   /** 可缩放图片：捏合缩放、双击放大/复位、放大后单指拖动平移。 */
   @Builder
   zoomableImage(src: string) {
@@ -563,7 +611,21 @@ export struct ReaderPage {
       .height('100%')
       .scale({ x: this.imgScale, y: this.imgScale })
       .translate({ x: this.imgOffsetX, y: this.imgOffsetY })
-      // 并行竞技场 + 延迟消歧：单击走 `toggleImmersiveSoon`（280ms 后才切），
+      // `ImageFit.Contain` 的实际绘制尺寸（未缩放）：平移夹取必须按它算，否则留黑的轴上能拖出黑边。
+      .onComplete((e) => {
+        if (e === undefined) {
+          return;
+        }
+        const w: number = px2vp(Number(e.contentWidth));
+        const h: number = px2vp(Number(e.contentHeight));
+        if (w > 0 && h > 0 && (w !== this.contentW || h !== this.contentH)) {
+          this.contentW = w;
+          this.contentH = h;
+        }
+      })
+      // 双击放大/复位走显式动画（`animateTo`，见 `applyDoubleTap`）；拖动与捏合逐帧跟手，
+      // 这里**不挂** `.animation()` —— 否则每次 `onActionUpdate` 都会排一遍过渡，拖动会明显发飘。
+      // 并行竞技场 + 延迟消歧：单击走 `toggleImmersiveSoon`（延迟一拍后才切），
       // 双击先到就取消待触发再缩放 —— 捏合/拖动与原来一样共存。
       // 关键：`distanceThreshold` 必须给（默认 2^31-1 = 手指不离开就算点击，滑动会被吞成单击）。
       .onGestureJudgeBegin((info: GestureInfo): GestureJudgeResult => {
@@ -583,19 +645,24 @@ export struct ReaderPage {
           PinchGesture({ fingers: 2 })
             .onActionStart(() => { this.pinchBase = this.imgScale; })
             .onActionUpdate((e: GestureEvent) => {
-              this.imgScale = applyPinch(this.pinchBase, e.scale, ZOOM_MIN, ZOOM_MAX);
-              this.imgOffsetX = clampOffset(this.imgOffsetX, this.viewW, this.imgScale);
-              this.imgOffsetY = clampOffset(this.imgOffsetY, this.viewH, this.imgScale);
+              const next: number = applyPinch(this.pinchBase, e.scale, ZOOM_MIN, ZOOM_MAX);
+              // 缩放中心的补偿由 `scale` 的 `centerX/centerY`（默认 50%）承担，这里只夹取范围。
+              // 注意当前偏移必须按**新**比例夹取：缩回 1 倍时范围收成 0，图片自动回中。
+              this.imgScale = next;
+              this.imgOffsetX = this.clampOffsetX(this.imgOffsetX, next);
+              this.imgOffsetY = this.clampOffsetY(this.imgOffsetY, next);
+            })
+            .onActionEnd(() => {
+              // 捏合结束把平移基准对齐到最终比例/偏移，下一次单指拖动才不会跳。
+              this.pinchBase = this.imgScale;
+              this.panBaseX = this.imgOffsetX;
+              this.panBaseY = this.imgOffsetY;
             }),
           TapGesture({ count: 2, distanceThreshold: ReaderPage.TAP_SLOP })
             .onAction(() => {
               this.cancelImmersiveSoon();
               this.lastDoubleTap = Date.now();
-              this.imgScale = nextDoubleTapScale(this.imgScale, ZOOM_MAX);
-              if (this.imgScale <= ZOOM_MIN) {
-                this.imgOffsetX = 0;
-                this.imgOffsetY = 0;
-              }
+              this.applyDoubleTap();
             }),
           PanGesture({ fingers: 1, distance: 10 })
             .tag(ReaderPage.ZOOM_PAN_TAG)
@@ -608,8 +675,11 @@ export struct ReaderPage {
               if (this.imgScale <= ZOOM_MIN) {
                 return;
               }
-              this.imgOffsetX = clampOffset(this.panBaseX + e.offsetX, this.viewW, this.imgScale);
-              this.imgOffsetY = clampOffset(this.panBaseY + e.offsetY, this.viewH, this.imgScale);
+              // 回调偏移在局部坐标里（含 `scale()`），换算回屏幕 vp 再夹取，否则拖动慢 `scale` 倍。
+              this.imgOffsetX = this.clampOffsetX(
+                this.panBaseX + panTranslate(e.offsetX, this.imgScale), this.imgScale);
+              this.imgOffsetY = this.clampOffsetY(
+                this.panBaseY + panTranslate(e.offsetY, this.imgScale), this.imgScale);
             })
         )
       )
@@ -620,7 +690,7 @@ export struct ReaderPage {
     if (this.total <= 0) {
       return;
     }
-    // 滑动（`onIndexChange` 只由 `Swiper.onChange` 触发）时取消待触发的单击切换：点按后 280ms 内滑动不再附带切沉浸。
+    // 滑动（`onIndexChange` 只由 `Swiper.onChange` 触发）时取消待触发的单击切换：点按后延迟窗口内滑动不再附带切沉浸。
     this.cancelImmersiveSoon();
     this.resetZoom();
     this.generation += 1;
@@ -1068,8 +1138,14 @@ export struct ReaderPage {
   /** 纵向阅读：不做 RTL 反转，滚动到哪加载到哪。 */
   @Builder
   verticalList() {
-    // `initialIndex` 必须给：`onScrollIndex` 在列表初始化时会触发一次，若从 0 开始会
-    // 把该 gid 的进度覆盖成 0（同时让"切到纵向"能停在当前页）。
+    // 纵向列表**不做缩放**（双击放大与捏合都已移除，见 #73 的结论）。
+    //
+    // 为什么不把缩放挂在这一层：`Scroll.zoomScale` 会把整棵 `List` 一起放大，于是
+    //   1) 外层 `Scroll` 获得可滚区间、抢走内层 `List` 的单指滚动（`onScrollIndex` 停摆）；
+    //   2) 内层 `List` 收到的手势位移是被缩放过的局部坐标（实测 1/4），拖动变慢；
+    //   3) 横轴一个接收者都没有（外层 PAN 被禁），放大后左右拖完全无响应。
+    // 而「另开一个只含单图的看图层」也没能救回来（长条漫用 `Contain` 会反而变小、
+    // 双击过渡必然闪、缩回 1× 还停在单图态卡边缘）—— 详见 #73。条漫整宽显示本来就不需要放大。
     List({ scroller: this.listScroller, initialIndex: this.currentPage }) {
       // 不用 `virtualScroll`：懒加载用估算高度，`scrollToIndex`（进度条跳页）会落偏
       // （目标 45 页会停到 30 页附近）。全部建项才能保证高度精确；`@ReusableV2` 在增删项时仍生效。
@@ -1089,12 +1165,17 @@ export struct ReaderPage {
         .key((_item: ReaderImage, index: number) => `${index}`)
     }
     .width('100%')
-    .layoutWeight(1)
-    // 纵向项内无手势，点列表即走延迟切换（与横向一致的 280ms 消歧；纵向双击无缩放语义，
-    // 第二次点击会取消第一次的待触发再重排，仍只切换一次）。
-    .onClick(() => {
-      this.toggleImmersiveSoon();
-    }, ReaderPage.TAP_SLOP)
+    .height('100%')
+    // 单击走延迟切换，与横向阅读同一套消歧（`lastDoubleTap` 已随纵向放大一起移除）。
+    // `distanceThreshold` 必须给，否则滑动会被吞成点击（默认阈值是 2^31-1）。
+    //
+    // 纵向**不做双击放大、也不做捏合**：这是刻意的取舍，理由见 `verticalList` 开头那段。
+    .gesture(
+      TapGesture({ count: 1, distanceThreshold: ReaderPage.TAP_SLOP })
+        .onAction(() => {
+          this.toggleImmersiveSoon();
+        })
+    )
     .onScrollStart(() => {
       this.scrolling = true;
       // 一开始滚就取消待触发的单击（否则快速一划会被当成单击切操作栏）。
@@ -1520,7 +1601,7 @@ export struct ReaderPage {
       this.init();
     })
     // 退出阅读即恢复窗口状态（常亮关、全屏退），不影响其他页面。
-    // 先取消待触发的单击切换：否则 280ms 内退出会让定时器在页外把窗口切进沉浸，且无页面能恢复它。
+    // 先取消待触发的单击切换：否则延迟窗口内退出会让定时器在页外把窗口切进沉浸，且无页面能恢复它。
     .onDisAppear(() => {
       this.cancelScrubThumb();
       this.clearScrubThumb();
