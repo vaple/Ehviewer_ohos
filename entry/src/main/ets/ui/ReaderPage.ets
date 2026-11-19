@@ -664,7 +664,11 @@ export struct ReaderPage {
               this.lastDoubleTap = Date.now();
               this.applyDoubleTap();
             }),
-          PanGesture({ fingers: 1, distance: 10 })
+          // `fingers` 是**下限**（SDK 明文）：`PanGesture({fingers: 1})` 在双指时照样触发，
+          // 而多指时 `onActionUpdate` 只跟其中**一根**手指（SDK：updates the location information
+          // of only one finger each time）→ 捏合/张开时它会把偏移写偏，表现为画面突然跳一小段。
+          // `isFingerCountLimited: true` 强制「手指数必须精确等于 fingers」，双指时 Pan 不参与。
+          PanGesture({ fingers: 1, distance: 10, isFingerCountLimited: true })
             .tag(ReaderPage.ZOOM_PAN_TAG)
             .onActionStart(() => {
               this.cancelImmersiveSoon();
