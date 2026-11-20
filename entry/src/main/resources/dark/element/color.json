@@ -82,11 +82,11 @@
     },
     {
       "name": "reader_btn_bg",
-      "value": "#212121"
+      "value": "#1CFFFFFF"
     },
     {
       "name": "reader_btn_ring",
-      "value": "#3D3D3D"
+      "value": "#22FFFFFF"
     },
     {
       "name": "skeleton_bg",

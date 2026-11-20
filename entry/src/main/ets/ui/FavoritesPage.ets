@@ -9,11 +9,13 @@ import { Logger } from '../common/Logger';
 import { errorText } from '../common/ErrorText';
 import { AppSettings } from '../state/AppSettings';
 import { WindowState } from '../state/WindowState';
-import { HdsListItem, HdsNavDestination, PrefixImage } from '@kit.UIDesignKit';
+import { HdsListItem, HdsNavDestination, PrefixCustomBuilder } from '@kit.UIDesignKit';
 import { PagedDataSource, PREFETCH_TAIL, shouldFetchMore } from '../common/PagedList';
 import { GalleryListFeed } from './GalleryListFeed';
 import { GalleryListPage } from '../parser/GalleryListParser';
-import { GalleryRowItem, loadMissingThumbs, rowLine1, rowLine2, toDetailPreview } from './GalleryRow';
+import { GalleryRowItem, rowLine1, rowLine2, toDetailPreview } from './GalleryRow';
+import { FavThumbCell } from './FavThumbCell';
+import { ImageStore } from '../service/ImageStore';
 import { catLabel } from './CategoryStyle';
 import { FavCatSheet, FavCatOption } from './FavCatSheet';
 import { PAGE_PADDING, TOUCH_MIN, sheetBackdrop } from './Materials';
@@ -64,6 +66,15 @@ export struct FavoritesPage {
   /** 收藏列表滚动器（标题栏渐变模糊用）。 */
   private scroller: Scroller = new Scroller();
   private isLoading: boolean = false;
+  /**
+   * 缩略图取图用的客户端与引用站点（`load()` 里跟着登录态一起建）。
+   * 单独存一份的理由：`FavThumbCell` 是在**行可见时**才取图的，那时 `load()` 的局部变量早就出栈了。
+   */
+  private thumbClient: EhClient | null = null;
+  private thumbSite: EhSite = EhSite.E;
+  private thumbStore: ImageStore | null = null;
+  /** 同一张缩略图的在飞请求（按 gid 去重；`ImageStore` 自己也按 URL 合并，这里只是省一次 await）。 */
+  private thumbInflight: Map<number, Promise<string>> = new Map<number, Promise<string>>();
   /** 分页状态唯一持有者；每取一页顺手刷新收藏分类/计数/排序元信息。 */
   private feed: GalleryListFeed = new GalleryListFeed(async (url: string): Promise<GalleryListPage> => {
     const cookies: CookieStore = new CookieStore();
@@ -90,6 +101,66 @@ export struct FavoritesPage {
 
   private clientOf(cookies: CookieStore): EhClient {
     return new EhClient(new RcpHttpClient(), cookies);
+  }
+
+  /**
+   * 取某一行缩略图的本地 URI（`FavThumbCell` 注入）。空串 = 该条目站点没给缩略图。
+   * 失败直接抛给调用方：那一格会显示可点的重试图标（不再像 `loadMissingThumbs` 那样静默吞掉）。
+   */
+  private ensureThumb(item: GalleryRowItem): Promise<string> {
+    if (item.thumb.length > 0) {
+      return Promise.resolve(item.thumb);
+    }
+    if (item.thumbUrl.length === 0) {
+      return Promise.resolve('');
+    }
+    const running: Promise<string> | undefined = this.thumbInflight.get(item.gid);
+    if (running !== undefined) {
+      // 不用 `await`：`@typescript-eslint/await-thenable` 会把 Map 里取的 Promise 误报成非 Promise（见 #71）。
+      return running;
+    }
+    const task: Promise<string> = this.fetchThumb(item);
+    this.thumbInflight.set(item.gid, task);
+    // 完成与失败都必须摘掉：否则一次网络抖动会让这个 gid 永久拿到 rejected promise。
+    task.then((_uri: string) => {
+      this.thumbInflight.delete(item.gid);
+    }).catch((_e: object) => {
+      this.thumbInflight.delete(item.gid);
+    });
+    return task;
+  }
+
+  private async fetchThumb(item: GalleryRowItem): Promise<string> {
+    const client: EhClient | null = this.thumbClient;
+    if (client === null) {
+      // 还没登录/还没拿到列表：不做请求，也不记失败（下次可见时会重试）。
+      return '';
+    }
+    let store: ImageStore | null = this.thumbStore;
+    if (store === null) {
+      store = new ImageStore();
+      await store.init(this.context());
+      this.thumbStore = store;
+    }
+    return await store.get(client, item.thumbUrl, EhUrl.referer(this.thumbSite));
+  }
+
+  /**
+   * 收藏行 A 区：固定的自定义前缀（`PrefixCustomBuilder`）。
+   *
+   * 为什么必须是「固定存在 + 子组件自己读状态」：`hdsListItemCard` 的 options 是构造时的快照，
+   * `LazyForEach` 建好的行也不会因为数据到达重跑 builder（`ui/AGENTS.md` #65）。
+   * 原来写 `thumb.length > 0 ? PrefixImage : undefined` 时，两张后果同时发生：
+   * ① 没图的那一行 A 区整个不存在 → 标题文字铺满整行，图到了才缩回去（版式跳一下）；
+   * ② 图即使后来到了，页面也不会重算 options → **这一行永远没有图**。
+   * 现在 A 区恒占 56×56：缺图时是流光骨架，图到由 `FavThumbCell` 自己切过来。
+   */
+  @Builder
+  favThumb(item: GalleryRowItem) {
+    FavThumbCell({
+      item: item,
+      load: (row: GalleryRowItem) => this.ensureThumb(row)
+    })
   }
 
   /** 移动收藏夹半模态内容（官方 `bindSheet` 承载）。 */
@@ -186,6 +257,8 @@ export struct FavoritesPage {
         return;
       }
       const client: EhClient = this.clientOf(cookies);
+      this.thumbClient = client;
+      this.thumbSite = site;
       this.message = '加载中…';
       // 后续页面用站点给的 next（`favorites.php?next=…`）；这里只构造第一页。
       const firstUrl: string =
@@ -194,9 +267,9 @@ export struct FavoritesPage {
       this.items = this.feed.items;
       this.message = this.items.length === 0 ? '还没有云收藏' : '';
       this.dataSource.setItems(this.items, this.feed.hasMore);
-      loadMissingThumbs(this.context(), client, site, this.items).catch((_e: object) => {
-        // 缩略图补齐失败不影响列表
-      });
+      // 缩略图不在这里批量补：翻页新来的条目也会自己取（每行 `FavThumbCell` 在 `onAppear` 时取一次）。
+      // 原来的一次性 `loadMissingThumbs` 只覆盖「本次 load 拿到的这一页」，而且失败是静默的——
+      // 那正是「点进去一直是空的、再也出不来」的成因。
     } catch (e) {
       Logger.error('Fav', `cloud load failed: ${e}`);
       this.message = errorText(e as Object);
@@ -460,9 +533,9 @@ export struct FavoritesPage {
             LazyForEach(this.dataSource, (item: GalleryRowItem) => {
               HdsListItem({
                 hdsListItemCard: {
-                  prefixItem: item.thumb.length > 0
-                    ? new PrefixImage({ image: item.thumb })
-                    : undefined,
+                  prefixItem: new PrefixCustomBuilder(() => {
+                    this.favThumb(item)
+                  }),
                   textItem: {
                     primaryText: {
                       text: item.title.length > 0 ? item.title : `gid ${item.gid}`

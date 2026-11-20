@@ -158,6 +158,11 @@ export struct ReaderPage {
   @Local chromeShown: boolean = true;
   /** 阅读器窗口（进页时缓存；`setTimeout` 里不能 `getUIContext()`，切系统栏时复用它）。 */
   private readerWindow: window.Window | undefined = undefined;
+  /**
+   * `onReady` 缓存的主机 Context：`setStatusBarVisible` 会在 `setTimeout` 与 promise 回调里兜底取窗口，
+   * 那时不能再碰 `getUIContext()`（会抛错，见 `ui/AGENTS.md` #26）。
+   */
+  private hostContext: common.Context | undefined = undefined;
   /** 状态栏高度：操作栏显示时顶栏要避让（否则时钟/电池压在标题和图标上）。 */
   private windowState: WindowState = AppStorageV2.connect(WindowState, () => new WindowState())!;
   private pinchBase: number = ZOOM_MIN;
@@ -238,6 +243,12 @@ export struct ReaderPage {
       // 只切覆盖层：系统栏在进页时已经藏好，切换操作栏不再改窗口 → 图片不位移。
       // 注意：不要在 `setTimeout` 里 `getUIContext()`（脱离 UI 上下文会抛错，切换静默失效）；
       // 淡入淡出交给两个操作栏包装层上的 `.transition(...)`。
+      if (this.total <= 0) {
+        // 页面还在拉详情：操作栏压根没渲染（`total` 为 0），翻转 `chromeShown` 只会让「首帧该不该显示操作栏」
+        // 变成随机结果。加载态单击的唯一意义是把状态栏叫出来，不动 `chromeShown`。
+        this.setStatusBarVisible(true);
+        return;
+      }
       this.chromeShown = !this.chromeShown;
       // 操作栏出现时把状态栏（时间/电量）一起带出来；收起时再藏回去。
       this.setStatusBarVisible(this.chromeShown);
@@ -286,6 +297,11 @@ export struct ReaderPage {
       await win.setWindowLayoutFullScreen(on);
       await win.setWindowSystemBarEnable(on ? [] : ['status', 'navigation']);
       this.immersive = on;
+      // 进页/复位后按**当前**覆盖层状态同步系统栏：写死 `true` 会和「用户先把操作栏收起、
+      // 再触发一次 setImmersive」打架（操作栏没了、状态栏却一直亮着）。
+      if (on) {
+        this.setStatusBarVisible(this.chromeShown);
+      }
     } catch (e) {
       Logger.error('Reader', `setImmersive(${on}) failed: ${e}`);
       this.message = '全屏设置失败，请重试';
@@ -294,13 +310,31 @@ export struct ReaderPage {
 
   /**
    * 操作栏显隐时联动状态栏（需要看时间/电量）。
-   * 用进页缓存的窗口对象：这个函数会在 `setTimeout` 里被调用，不能在那里取 `getUIContext()`。
+   * 用进页缓存的窗口对象：这个函数会在 `setTimeout` 里被调用，**不能**在那里 `getUIContext()`（会抛错，
+   * 见 `ui/AGENTS.md` #26），所以兜底取窗口用的是 `onReady` 时就缓存好的 `common.Context`。
+   * 缓存还没有时（进页的 `setImmersive` 尚未 await 回来）补取一次并记住，**不要**直接 return——
+   * 那会让「操作栏已翻转、状态栏没动」变成一次静默的状态错配。
    */
   private setStatusBarVisible(visible: boolean): void {
     const win: window.Window | undefined = this.readerWindow;
-    if (win === undefined) {
+    if (win !== undefined) {
+      this.applyStatusBar(win, visible);
       return;
     }
+    const ctx: common.Context | undefined = this.hostContext;
+    if (ctx === undefined) {
+      Logger.error('Reader', `status bar visible=${visible}: window/context not ready`);
+      return;
+    }
+    window.getLastWindow(ctx).then((last: window.Window) => {
+      this.readerWindow = last;
+      this.applyStatusBar(last, visible);
+    }).catch((e: object) => {
+      Logger.error('Reader', `status bar visible=${visible} window lookup failed: ${e}`);
+    });
+  }
+
+  private applyStatusBar(win: window.Window, visible: boolean): void {
     win.setWindowLayoutFullScreen(true)
       .then(() => win.setWindowSystemBarEnable(visible ? ['status'] : []))
       .catch((e: object) => {
@@ -322,9 +356,8 @@ export struct ReaderPage {
   private async init(): Promise<void> {
     // 进页即全屏（只做一次）：之后单击只切覆盖层，窗口/布局不再变化 → 图片不位移。
     // 先等窗口切完再建首帧，避免「先按有系统栏布局、再按无系统栏重排」的一次性跳动。
+    // 系统栏由 `setImmersive` 按 `chromeShown` 同步（这里不再硬写「显示状态栏」，否则会把用户刚收起的操作栏状态写歪）。
     await this.setImmersive(true);
-    // 进页时操作栏是显示的 → 状态栏也一起显示；单击收起时再藏。
-    this.setStatusBarVisible(true);
     await downloadManager.init(this.context());
     await downloadManager.prepareLocal(this.gid);
     setDiagContext(`page=reader gid=${this.gid}`);
@@ -1081,27 +1114,59 @@ export struct ReaderPage {
     }
   }
 
+  /**
+   * 占位态的单击：图还没到时也要能唤出操作栏。
+   *
+   * 为什么必须补：切操作栏的手势原本只挂在 `Image`（`zoomableImage`）和纵向 `List` 上，
+   * 「这一页的图还没落盘」时那整块区域**没有任何手势** → 单击毫无反应，看不见页码也看不见返回，
+   * 只能干等图片下完（或退回系统返回手势）。手势参数必须与图片那份完全一致：
+   * `distanceThreshold` 不给就是 `2^31-1`（手指不离开就算点击），滑动会被吞成单击（见 `ui/AGENTS.md` #33）。
+   *
+   * 用 `.gesture(TapGesture)` 而不是 `.onClick`：子节点（「重新加载」）自己的点击不再冒泡上来被吞成切操作栏
+   * （#73 的真机结论）。
+   */
+  private placeholderTap(): TapGestureInterface {
+    return TapGesture({ count: 1, distanceThreshold: ReaderPage.TAP_SLOP })
+      .onAction(() => {
+        this.toggleImmersiveSoon();
+      });
+  }
+
   /** 横向单页：已落盘 → 可缩放图；失败 → 重试；否则加载圈。 */
   @Builder
   horizontalPage(page: number) {
     if (this.images[page].url.length > 0) {
       this.zoomableImage(this.images[page].url)
     } else if (this.images[page].failed) {
-      Column({ space: 8 }) {
-        SymbolGlyph($r('sys.symbol.arrow_clockwise'))
-          .fontSize(30)
-          .fontColor([$r('sys.color.brand')])
-        Text('重新加载')
-          .fontSize(13)
-          .fontColor($r('sys.color.brand'))
+      Column() {
+        // 重试块自己带 `onClick`：点它只重取本页，不切操作栏（父层的 `TapGesture` 不会吞子节点的点击）。
+        Column({ space: 8 }) {
+          SymbolGlyph($r('sys.symbol.arrow_clockwise'))
+            .fontSize(30)
+            .fontColor([$r('sys.color.brand')])
+          Text('重新加载')
+            .fontSize(13)
+            .fontColor($r('sys.color.brand'))
+        }
+        .padding(24)
+        .onClick(() => {
+          this.images[page].failed = false;
+          this.loadPage(page, true);
+        })
       }
-      .padding(24)
-      .onClick(() => {
-        this.images[page].failed = false;
-        this.loadPage(page, true);
-      })
+      // 铺满整页：占位区有多大，能单击的面积就有多大（只占自身高度时点空白处仍然没反应）。
+      .width('100%')
+      .height('100%')
+      .justifyContent(FlexAlign.Center)
+      .gesture(this.placeholderTap())
     } else {
-      LoadingProgress().width(40).height(40)
+      Column() {
+        LoadingProgress().width(40).height(40)
+      }
+      .width('100%')
+      .height('100%')
+      .justifyContent(FlexAlign.Center)
+      .gesture(this.placeholderTap())
     }
   }
 
@@ -1259,8 +1324,9 @@ export struct ReaderPage {
         .layoutWeight(1)
       // 官方安全控件（图标态）：点击即获媒体库临时授权；圆形与返回/分享同尺寸同底色。
       // 底色用与两侧**同一个** `reader_btn_bg`：安全控件会把 alpha < 0x1A 的底色强制拉到 0xFF
-      // （SDK `security_component.d.ts` 明文），所以浅色那份取 #1C000000（alpha 0x1C > 0x1A）——
-      // 既保留半透明光感，又不会被系统拉成纯黑方块。
+      // （SDK `security_component.d.ts` 明文），所以两份令牌都取 alpha > 0x1A 的半透明白/黑
+      // （浅色 #1C000000、深色 #1CFFFFFF）—— 既保留半透明光感，又不会被系统拉成纯色方块。
+      // 深色那份尤其不能写成不含 alpha 的 #212121：那是不透明色，图透不出来，「磨砂光感」直接消失。
       SaveButton({ icon: SaveIconStyle.LINES, buttonType: ButtonType.Circle })
         .userCancelEvent(true)
         .iconSize(20)
@@ -1458,6 +1524,8 @@ export struct ReaderPage {
           // 内容层：铺满（不参与标题栏布局）；阅读器自成一套表面（纯白/纯黑）。
           Column() {
             if (this.total <= 0 || this.images.length < this.total) {
+              // 整页占位（首次拉详情期间）：操作栏此时根本不渲染（`total` 还是 0），
+              // 但单击仍要能唤出系统状态栏——否则加载期间屏幕对单击完全无响应。
               if (this.ready) {
                 Column({ space: 16 }) {
                   Text(this.message).fontSize(14).fontColor($r('app.color.text_secondary'))
@@ -1472,6 +1540,7 @@ export struct ReaderPage {
                 .width('100%')
                 .height('100%')
                 .justifyContent(FlexAlign.Center)
+                .gesture(this.placeholderTap())
               } else {
                 Column() {
                   LoadingProgress().width(48).height(48)
@@ -1479,6 +1548,7 @@ export struct ReaderPage {
                 .width('100%')
                 .height('100%')
                 .justifyContent(FlexAlign.Center)
+                .gesture(this.placeholderTap())
               }
             } else if (this.settings.readerDirection === ReadingDirection.VERTICAL) {
               this.verticalList()
@@ -1595,6 +1665,8 @@ export struct ReaderPage {
     })
     .onReady((ctx: NavDestinationContext) => {
       this.pageStack = ctx.pathStack;
+      // 缓存 Context：之后的系统栏切换可能在 `setTimeout`/promise 里发生，那时 `getUIContext()` 不可用（#26）。
+      this.hostContext = this.context();
       const param: DetailParam | undefined = ctx.pathInfo.param as DetailParam | undefined;
       if (param === undefined) {
         Logger.error('Reader', 'reader opened without param');
