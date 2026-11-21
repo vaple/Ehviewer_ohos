@@ -6,6 +6,7 @@ import { RcpHttpClient } from '../network/RcpHttpClient';
 import { EhClient } from '../network/EhClient';
 import { Logger } from '../common/Logger';
 import { GalleryRow, GalleryRowItem, loadMissingThumbs, pushGalleryDetail } from './GalleryRow';
+import { GalleryRowSkeleton, SKELETON_ROW_INDICES } from './GalleryRowSkeleton';
 import { AppSettings } from '../state/AppSettings';
 import { WindowState } from '../state/WindowState';
 import { FilterDao } from '../db/dao/FilterDao';
@@ -135,21 +136,23 @@ export struct DiscoverListPage {
             ListItem() {
               Column().height(this.windowState.safeTop + TITLE_BAR_H + 8)
             }
+            // 首屏骨架行（内容未到时与真行同尺寸，出数据不跳版式）。
+            if (this.items.length === 0 && this.message.endsWith('…')) {
+              Repeat(SKELETON_ROW_INDICES)
+                .each((_ri: RepeatItem<number>) => {
+                  ListItem() {
+                    GalleryRowSkeleton()
+                  }
+                  .padding({ left: PAGE_PADDING, right: PAGE_PADDING, bottom: CARD_GAP })
+                })
+                .key((i: number) => `sk-${i}`)
+            }
             // 空态 / 加载 / 错误：**必须作为 ListItem 放在 List 里**。
             // 做成 `Stack` 的兄弟节点会被挤成 0 高（List 是 `height('100%')`，Stack 已占满整页），
             // 页面就只剩一片空白（连节点都不会出现在 layout 里）。
-            if (this.items.length === 0 && this.message.length > 0) {
+            if (this.items.length === 0 && this.message.length > 0 && !this.message.endsWith('…')) {
               ListItem() {
-                if (this.message.endsWith('…')) {
-                  Column({ space: 8 }) {
-                    LoadingProgress().width(32).height(32)
-                    Text(this.message)
-                      .fontSize(12)
-                      .fontColor($r('app.color.text_secondary'))
-                  }
-                  .width('100%')
-                  .padding({ top: 96 })
-                } else if (this.message === '暂无订阅') {
+                if (this.message === '暂无订阅') {
                   // 订阅空态：直接给去官方 My Tags 关注的引导（订阅内容由 My Tags 的 Watched 决定）。
                   Column({ space: 10 }) {
                     Text(this.message)

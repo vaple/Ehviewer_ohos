@@ -12,6 +12,7 @@ import { AppSettings } from '../state/AppSettings';
 import { WindowState } from '../state/WindowState';
 import { HdsNavDestination } from '@kit.UIDesignKit';
 import { GalleryRow, GalleryRowItem, loadMissingThumbs, pushGalleryDetail } from './GalleryRow';
+import { GalleryRowSkeleton, SKELETON_ROW_INDICES } from './GalleryRowSkeleton';
 import { CARD_GAP, PAGE_PADDING } from './Materials';
 import { navTitleBarStyle, TITLE_BAR_H } from './NavStyle';
 
@@ -99,6 +100,17 @@ export struct HistoryPage {
           ListItem() {
             Column().height(this.windowState.safeTop + TITLE_BAR_H)
           }
+          // 首屏骨架行：本地库也是异步读，用同尺寸占位避免"转圈 → 5 行"的跳变。
+          if (this.items.length === 0 && this.message.endsWith('…')) {
+            Repeat(SKELETON_ROW_INDICES)
+              .each((_ri: RepeatItem<number>) => {
+                ListItem() {
+                  GalleryRowSkeleton()
+                }
+                .padding({ left: PAGE_PADDING, right: PAGE_PADDING, bottom: CARD_GAP })
+              })
+              .key((i: number) => `sk-${i}`)
+          }
           Repeat(this.items)
             .virtualScroll({ reusable: false })
             .each((ri: RepeatItem<GalleryRowItem>) => {
@@ -115,20 +127,11 @@ export struct HistoryPage {
         .width('100%')
         .layoutWeight(1)
         .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
-        if (this.message.length > 0) {
-          if (this.message.endsWith('…')) {
-            Column() {
-              LoadingProgress().width(32).height(32)
-            }
-            .width('100%')
-            .layoutWeight(1)
-            .justifyContent(FlexAlign.Center)
-          } else {
-            Text(this.message)
-              .fontSize(12)
-              .fontColor($r('app.color.text_secondary'))
-              .padding(6)
-          }
+        if (this.message.length > 0 && !this.message.endsWith('…')) {
+          Text(this.message)
+            .fontSize(12)
+            .fontColor($r('app.color.text_secondary'))
+            .padding(6)
         }
       }
       .width('100%')

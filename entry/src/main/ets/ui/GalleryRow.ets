@@ -6,6 +6,7 @@ import { ImageStore } from '../service/ImageStore';
 import { CATEGORY_UNKNOWN } from '../parser/ParserUtils';
 import { catColor, catLabel } from './CategoryStyle';
 import { CARD_RADIUS, THUMB_RADIUS } from './Materials';
+import { SkeletonBlock } from './Skeleton';
 import { DetailParam, DetailPreview } from '../model/DetailParam';
 
 /**
@@ -130,6 +131,12 @@ async function loadThumb(store: ImageStore, client: EhClient,
 @ComponentV2
 export struct GalleryRow {
   @Require @Param item: GalleryRowItem;
+  /**
+   * 内容区模式：不带自带背板/圆角/内边距，交给外层容器（HDS 卡片等）负责外壳。
+   * 收藏页的行是 `HdsListItem` 的 `customItemBuilder`——卡片背板由 HDS 画，
+   * 内容层再叠一层 `bg_secondary` 就是「卡片套卡片」（`ui/AGENTS.md` #76）。
+   */
+  @Param flat: boolean = false;
 
   build() {
     Row({ space: 12 }) {
@@ -140,6 +147,17 @@ export struct GalleryRow {
             .width('100%')
             .height('100%')
             .objectFit(ImageFit.Cover)
+        } else {
+          // 骨架占位（官方流光，见 `ui/Skeleton.ets`）：与真图同尺寸，行高不会在出图时跳。
+          // 站点本来就没给缩略图（`thumbUrl` 为空）时给静色块：那种行永远等不到图，不该一直流光。
+          if (this.item.thumbUrl.length > 0) {
+            SkeletonBlock({ w: '100%', h: '100%', corner: THUMB_RADIUS })
+          } else {
+            Column()
+              .width('100%')
+              .height('100%')
+              .backgroundColor($r('app.color.bg_primary'))
+          }
         }
       }
       .width(84)
@@ -188,10 +206,11 @@ export struct GalleryRow {
       .alignItems(HorizontalAlign.Start)
     }
     .width('100%')
-    .padding(10)
+    // `flat` 模式下不画外壳（背板/圆角/内边距交给外层容器，如 `HdsListItem` 的卡片）。
+    .padding(this.flat ? 0 : 10)
     // 卡片形态：统一圆角/底色（令牌见 `ui/Materials.ets`），不再用行分隔线；
     // 页面留白与行间距由调用方 `ListItem` 的 padding 承担（卡片自带 margin 会与 width('100%') 溢出）。
-    .backgroundColor($r('app.color.bg_secondary'))
-    .borderRadius(CARD_RADIUS)
+    .backgroundColor(this.flat ? Color.Transparent : $r('app.color.bg_secondary'))
+    .borderRadius(this.flat ? 0 : CARD_RADIUS)
   }
 }

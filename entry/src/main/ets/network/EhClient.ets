@@ -269,23 +269,6 @@ export class EhClient {
     this.cache.drop(site, gid);
   }
 
-  /**
-   * 收藏排序切换（源 `FavoritesScene.getPageData(append)` + `FavoriteListSortDialog`）：
-   * 往当前收藏页后缀 `inline_set=fs_f|fs_p` 再 GET；该 GET 即设置服务端排序偏好。
-   * `order` `'f'` = 按收藏时间，`'p'` = 按发布时间。
-   */
-  async setFavOrder(site: EhSite, order: string, favCat: number, keyword: string, page: number): Promise<void> {
-    const url: string = EhUrl.favOrderUrl(site, order, favCat, keyword, page);
-    const headers: Record<string, string> = { 'Referer': EhUrl.referer(site) };
-    const opt: HttpRequestOptions = this.requestOptions(headers);
-    const resp: HttpResponse = await this.http.get(url, opt);
-    await this.persistCookies(resp);
-    const err: AppError | null = detectHtmlError(resp.body);
-    if (err !== null) {
-      throw err;
-    }
-  }
-
   /** 拉取图片页并解析出图片直链与 H@H `skipHathKey`。 */
   async getGalleryPage(site: EhSite, gid: number, page: number, pToken: string,
     skipHathKey?: string): Promise<GalleryPageResult> {

@@ -1,6 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { image } from '@kit.ImageKit';
-import { AppStorageV2, CapsuleSegmentButtonV2, PersistenceV2, SegmentButtonV2Items, UIContext, window } from '@kit.ArkUI';
+import { AppStorageV2, CapsuleSegmentButtonV2, PersistenceV2, SegmentButtonV2Items, UIContext, uiMaterial, window } from '@kit.ArkUI';
 import { systemShare } from '@kit.ShareKit';
 import { uniformTypeDescriptor } from '@kit.ArkData';
 import { EhSite, EhUrl } from '../network/EhUrl';
@@ -31,7 +31,7 @@ import { HdsNavDestination } from '@kit.UIDesignKit';
 import { ReadingProgressStore } from '../state/ReadingProgressStore';
 import { WindowState } from '../state/WindowState';
 import { READER_SHEET_H, TOUCH_MIN, sheetBackdrop } from './Materials';
-import { TITLE_BAR_H } from './NavStyle';
+import { TITLE_BAR_H, navTitleBarStyle } from './NavStyle';
 import { setDiagContext } from '../service/CrashCollector';
 
 /** 单页图片地址：落盘后就地刷新该项（`@Trace`），不再整表 `slice()` 重组。 */
@@ -823,7 +823,8 @@ export struct ReaderPage {
         tasks.push(PreviewChunkStore.instance.ensure(this.gid, c,
           () => client.getPreviews(this.site, this.gid, this.token, c)));
       }
-      await Promise.all(tasks);
+      // 任一邻块失败不该拖垮其余（限流 / 冷却）：能拿到的先画，失败块由 store 的冷却负责。
+      await Promise.allSettled(tasks);
       if (gen !== this.scrubGen || this.scrubPage < 0 || this.scrubTarget() !== page) {
         return;
       }
@@ -1002,7 +1003,11 @@ export struct ReaderPage {
         this.message = '图片尚未加载，请重试';
         return;
       }
-      await PhotoSaver.saveToGallery(this.context(), url);
+      const saved: boolean = await PhotoSaver.saveViaDialog(this.context(), url);
+      if (!saved) {
+        // 用户自己取消：不弹错误提示。
+        return;
+      }
       this.message = '已保存到相册';
     } catch (e) {
       Logger.error('Reader', `save page ${page + 1} failed: ${e}`);
@@ -1088,16 +1093,6 @@ export struct ReaderPage {
       Logger.error('Reader', `orientation lock failed: ${e}`);
       this.message = '方向锁定失败，请重试';
     }
-  }
-
-  /** `SaveButton` 点击：只有授权成功才存；拒绝/失败记日志 + 人话。 */
-  private onSaveClicked(result: SaveButtonOnClickResult): void {
-    if (result !== SaveButtonOnClickResult.SUCCESS) {
-      Logger.error('Reader', `save auth result=${result}`);
-      this.message = result === SaveButtonOnClickResult.CANCELED_BY_USER ? '已取消保存' : '保存未获授权，请重试';
-      return;
-    }
-    this.saveCurrentPage();
   }
 
   /** 方向直设（LTR/RTL/横向索引同步；纵向重建列表并放锚）。 */
@@ -1299,22 +1294,59 @@ export struct ReaderPage {
     }
   }
 
-  /** 顶部（覆盖式）：返回 + 标题 + 保存 + 分享。圆形按钮与详情页 HDS 标题栏同尺寸/同底。 */
+  /** 顶栏圆形按钮的材质：只有支持 IMMERSIVE 的设备才有（nova 14 不支持 → `undefined`）。 */
+  private buttonMaterial(): uiMaterial.Material | undefined {
+    if (!uiMaterial.isImmersiveMaterialSupported()) {
+      return undefined;
+    }
+    return new uiMaterial.ImmersiveMaterial({ style: uiMaterial.ImmersiveStyle.THIN });
+  }
+
+  private hasButtonMaterial(): boolean {
+    return uiMaterial.isImmersiveMaterialSupported();
+  }
+
+  /**
+   * 顶栏圆形图标按钮（三颗共用，保证材质/尺寸/描边完全一致）。
+   *
+   * 有材质时**不能**再设 `backgroundColor` / `border`——官方明文：设置了颜色相关属性就不显示材质。
+   * 没有材质（nova 14）时退回半透明底色 + 描边，与旧观感一致。
+   */
   @Builder
-  topBar() {
+  readerCircleButton(icon: Resource, label: string, action: () => void) {
+    Button({ type: ButtonType.Circle, stateEffect: true }) {
+      SymbolGlyph(icon)
+        .fontSize(20)
+        .fontColor([$r('app.color.text_primary')])
+    }
+    .width(40)
+    .height(40)
+    .backgroundColor(this.hasButtonMaterial() ? Color.Transparent : $r('app.color.reader_btn_bg'))
+    .border(this.hasButtonMaterial()
+      ? { width: 0 }
+      : { width: 1, color: $r('app.color.reader_btn_ring') })
+    .systemMaterial(this.buttonMaterial())
+    .accessibilityText(label)
+    .onClick(action)
+  }
+
+  /**
+   * 顶部操作栏（返回 + 标题 + 保存 + 分享）。
+   *
+   * 放进 `HdsNavDestination` 的**官方标题栏**（`titleBar.content.stackBuilder`），而不是在内容区
+   * 自己叠一层：沉浸光感的 `systemMaterial` 官方规定只在
+   * 「Navigation/NavDestination 标题栏 或 End 位底部 TabBar」内生效，内容区浮层设置了不渲染
+   * （见《组件适配沉浸光感》与 `ui/AGENTS.md` #67 / #93）。
+   *
+   * 三颗钮都是普通 `Button`（保存原来是安全控件 `SaveButton`，它没有材质属性，会让三颗钮不一致）。
+   * 保存改走 `showAssetsCreationDialog`（系统确认框），不再需要安全控件的临时授权。
+   *
+   * 高度用 `TITLE_BAR_H`（标题栏自己处理状态栏安全区），不再额外加 `safeTop`。
+   */
+  @Builder
+  readerTitleBar() {
     Row({ space: 8 }) {
-      // 官方 Button（Circle）负责居中图标：直接给 SymbolGlyph 设宽高只会撑占位盒、图标留在左上角。
-      Button({ type: ButtonType.Circle, stateEffect: true }) {
-        SymbolGlyph($r('sys.symbol.chevron_left'))
-          .fontSize(22)
-          .fontColor([$r('app.color.text_primary')])
-      }
-      .width(40)
-      .height(40)
-      .backgroundColor($r('app.color.reader_btn_bg'))
-      .border({ width: 1, color: $r('app.color.reader_btn_ring') })
-      .accessibilityText('返回')
-      .onClick(() => {
+      this.readerCircleButton($r('sys.symbol.chevron_left'), '返回', () => {
         this.pageStack?.pop();
       })
       Text('阅读')
@@ -1322,22 +1354,11 @@ export struct ReaderPage {
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_primary'))
         .layoutWeight(1)
-      // 官方安全控件（图标态）：点击即获媒体库临时授权；圆形与返回/分享同尺寸同底色。
-      // 底色用与两侧**同一个** `reader_btn_bg`：安全控件会把 alpha < 0x1A 的底色强制拉到 0xFF
-      // （SDK `security_component.d.ts` 明文），所以两份令牌都取 alpha > 0x1A 的半透明白/黑
-      // （浅色 #1C000000、深色 #1CFFFFFF）—— 既保留半透明光感，又不会被系统拉成纯色方块。
-      // 深色那份尤其不能写成不含 alpha 的 #212121：那是不透明色，图透不出来，「磨砂光感」直接消失。
-      SaveButton({ icon: SaveIconStyle.LINES, buttonType: ButtonType.Circle })
-        .userCancelEvent(true)
-        .iconSize(20)
-        .iconColor($r('app.color.text_primary'))
-        .width(40)
-        .height(40)
-        .backgroundColor($r('app.color.reader_btn_bg'))
-        .borderWidth(1)
-        .borderColor($r('app.color.reader_btn_ring'))
-        .onClick((event: ClickEvent, result: SaveButtonOnClickResult) => {
-          this.onSaveClicked(result);
+      // 保存：普通按钮 + 系统确认框（`PhotoSaver.saveViaDialog`）。
+      // 弹框会显示待保存图片的预览（实测 Mate 80 可以；SDK 注释说沙箱源不显示，与实测不符）。
+      this.readerCircleButton(
+        $r('sys.symbol.arrow_down_to_line'), '保存本页', () => {
+          this.saveCurrentPage();
         })
       Button({ type: ButtonType.Circle, stateEffect: true }) {
         SymbolGlyph($r('sys.symbol.share'))
@@ -1346,23 +1367,18 @@ export struct ReaderPage {
       }
       .width(40)
       .height(40)
-      .backgroundColor($r('app.color.reader_btn_bg'))
-      .border({ width: 1, color: $r('app.color.reader_btn_ring') })
+      .backgroundColor(this.hasButtonMaterial() ? Color.Transparent : $r('app.color.reader_btn_bg'))
+      .border(this.hasButtonMaterial()
+        ? { width: 0 }
+        : { width: 1, color: $r('app.color.reader_btn_ring') })
+      .systemMaterial(this.buttonMaterial())
       .accessibilityText('分享')
       .bindMenu(this.shareMenu)
     }
     .width('100%')
-    .height(TITLE_BAR_H + this.windowState.safeTop)
-    .padding({ left: 12, right: 12, top: this.windowState.safeTop })
+    .height(TITLE_BAR_H)
+    .padding({ left: 12, right: 12 })
     .alignItems(VerticalAlign.Center)
-    // 官方 linearGradient 渐变遮罩：顶部不透明 → 靠图一侧透明（取代整条不透明 blur 的硬边）。
-    .linearGradient({
-      angle: 180,
-      colors: [
-        [$r('app.color.reader_chrome'), 0],
-        [$r('app.color.reader_chrome_clear'), 1]
-      ]
-    })
   }
 
   /** 底部：进度条 + 页码 + 设置齿轮（选项全进 sheet）。 */
@@ -1561,13 +1577,25 @@ export struct ReaderPage {
           .backgroundColor($r('app.color.reader_bg'))
           .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
 
-          // 顶栏：只占 56vp，浮在图片上方，存在/消失都不改变内容布局。
+          // 顶部遮罩：一条连续渐变覆盖「状态栏 + 标题栏」整段（旧版做法）。
+          // 不再对标题栏单独加模糊：`backgroundBlurStyle` 在 56vp 的带上会形成一块均匀灰条
+          // 且有硬边，叠加下面的状态栏遮罩后是上下两层灰块（真机 Mate 80 观感反馈）。
+          // 磨砂仍由 HDS 标题栏的 `systemMaterialEffect` 提供（支持的设备才有），这里只保证
+          // 不出现硬边、状态栏文字可读。
           if (this.total > 0 && this.chromeShown) {
-            Column() {
-              this.topBar()
-            }
-            .width('100%')
-            .transition(TransitionEffect.OPACITY.animation({ duration: 200, curve: Curve.EaseInOut }))
+            Column()
+              .width('100%')
+              .height(this.windowState.safeTop + TITLE_BAR_H)
+              .hitTestBehavior(HitTestMode.None)
+              .linearGradient({
+                angle: 180,
+                colors: [
+                  [$r('app.color.reader_chrome'), 0],
+                  [$r('app.color.reader_chrome'), 0.55],
+                  [$r('app.color.reader_chrome_clear'), 1]
+                ]
+              })
+              .transition(TransitionEffect.OPACITY.animation({ duration: 200, curve: Curve.EaseInOut }))
           }
         }
         .width('100%')
@@ -1653,8 +1681,24 @@ export struct ReaderPage {
       .width('100%')
       .height('100%')
     }
-    // 阅读器不用 HDS 标题栏（会把内容压下去、切沉浸时整页重排）；返回走自己的覆盖式顶栏。
-    .hideTitleBar(true)
+    // 顶栏用官方标题栏（才吃得到沉浸光感；内容区浮层设置 `systemMaterial` 不渲染，`ui/AGENTS.md` #93）。
+    // 隐藏逻辑与自绘顶栏一致：加载完成前、或单击收起操作栏时不显示。第二参给动画，
+    // 替代原来的 `transition(OPACITY)`。
+    .titleBar({
+      avoidLayoutSafeArea: true,
+      style: navTitleBarStyle(),
+      content: {
+        // 自定义区域承载「返回 / 标题 / 保存 / 分享」；保存是安全控件，进不了图标菜单。
+        // 注意 `stackBuilder` 的类型是 `CustomBuilder`（`() => void`），必须传**函数**；
+        // 写成 `this.readerTitleBar()` 会在构造 options 时直接调用，标题栏拿不到节点。
+        stackBuilder: (): void => {
+          this.readerTitleBar();
+        }
+      }
+    })
+    // 自绘了返回钮，隐藏标题栏自带的，避免两个返回。
+    .hideBackButton(true)
+    .hideTitleBar(!(this.total > 0 && this.chromeShown), true)
     .bindSheet($$this.showSettings, this.settingsSheet(), {
       title: { title: '阅读选项' },
       // 默认挡位是 LARGE（近全屏），这 3 行设置会剩一大片空白（真机 `FIT_CONTENT` 不生效，见 READER_SHEET_H）。

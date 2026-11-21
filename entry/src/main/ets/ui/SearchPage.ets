@@ -14,6 +14,7 @@ import { AppSettings } from '../state/AppSettings';
 import { WindowState } from '../state/WindowState';
 import { HdsNavDestination, HideMode, HdsNavigationMenuItemOptions } from '@kit.UIDesignKit';
 import { GalleryRow, GalleryRowItem, loadMissingThumbs, pushGalleryDetail } from './GalleryRow';
+import { GalleryRowSkeleton, SKELETON_ROW_INDICES } from './GalleryRowSkeleton';
 import { fCatsMask, excludedFromSelected, encodeAdvance, ALL_CATS, languageQueryOf, exclusionQueryOf, SearchFilters } from '../search/SearchQuery';
 import { shouldSuggest, trailingToken, TagToken } from '../search/TagInput';
 import { appendDraft, joinQueryText, splitQueryTokens, suggestionChip } from '../search/QuerySegments';
@@ -821,10 +822,12 @@ export struct SearchPage {
   @Builder
   headerArea() {
     Column() {
-      Row({ space: 4 }) {
+      Row({ space: 8 }) {
         Search({ value: this.draft, placeholder: '关键词或标签', controller: this.searchController })
           .id(SEARCH_FIELD_ID)
           .layoutWeight(1)
+          // 提交按钮用组件原生形态（框内文字按钮）。图标版试过：`searchButton` 只接受文本，
+          // 拆到框外会与框内的灰放大镜重复、且实心圆抢焦点，整行不协调（用户真机反馈）。
           .searchButton('搜索')
           .onChange((value: string) => {
             // 输入框只承载草稿：空格就是空格（英文 tag 自带空格），不做「空格成词」。
@@ -872,12 +875,13 @@ export struct SearchPage {
             }
           })
         // 「＋」：草稿成词（与回车等价，但留着键盘）。草稿为空时是空操作。
+        // 触摸区与筛选图标一致（都是 44vp + `padding(6)`），两颗图标看起来才是同一组。
         SymbolGlyph($r('sys.symbol.plus'))
           .fontSize(18)
           .fontColor([$r('app.color.text_secondary')])
           .width(TOUCH_MIN)
           .height(TOUCH_MIN)
-          .padding(4)
+          .padding(6)
           .accessibilityText('把草稿变成条件')
           .onClick(() => {
             if (this.draft.trim().length === 0) {
@@ -1068,6 +1072,18 @@ export struct SearchPage {
               .transition(TransitionEffect.OPACITY.animation({ duration: 200, curve: Curve.EaseInOut }))
             }
 
+            // 首屏骨架行：搜索是程序化请求（没有下拉位移），圈在结果区上沿；
+            // 列表本身也用同尺寸占位，避免「转圈 → 5 行」的版式跳变。
+            if (this.busy && this.items.length === 0) {
+              Repeat(SKELETON_ROW_INDICES)
+                .each((_ri: RepeatItem<number>) => {
+                  ListItem() {
+                    GalleryRowSkeleton()
+                  }
+                  .padding({ left: PAGE_PADDING, right: PAGE_PADDING, bottom: CARD_GAP })
+                })
+                .key((i: number) => `sk-${i}`)
+            }
             LazyForEach(this.dataSource, (item: GalleryRowItem) => {
               ListItem() {
                 GalleryRow({ item: item })

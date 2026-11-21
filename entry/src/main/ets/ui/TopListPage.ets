@@ -7,6 +7,7 @@ import { EhClient } from '../network/EhClient';
 import { Logger } from '../common/Logger';
 import { errorText } from '../common/ErrorText';
 import { GalleryRow, GalleryRowItem, loadMissingThumbs, pushGalleryDetail } from './GalleryRow';
+import { GalleryRowSkeleton, SKELETON_ROW_INDICES } from './GalleryRowSkeleton';
 import { AppSettings } from '../state/AppSettings';
 import { WindowState } from '../state/WindowState';
 import { PagedDataSource, PREFETCH_TAIL, shouldFetchMore } from '../common/PagedList';
@@ -109,13 +110,21 @@ export struct TopListPage {
             ListItem() {
               Column().height(this.windowState.safeTop + TITLE_BAR_H + RANK_CHIPS_H + 8)
             }
-            // 空态 / 加载 / 错误：放在 List 里（做成 Stack 的兄弟节点会被挤成 0 高，见 `DiscoverListPage` 同处注释）。
-            if (this.items.length === 0 && this.message.length > 0) {
+            // 首屏骨架行（内容未到时与真行同尺寸，出数据不跳版式）。
+            if (this.items.length === 0 && this.message.endsWith('…')) {
+              Repeat(SKELETON_ROW_INDICES)
+                .each((_ri: RepeatItem<number>) => {
+                  ListItem() {
+                    GalleryRowSkeleton()
+                  }
+                  .padding({ left: PAGE_PADDING, right: PAGE_PADDING, bottom: CARD_GAP })
+                })
+                .key((i: number) => `sk-${i}`)
+            }
+            // 空态 / 错误：放在 List 里（做成 Stack 的兄弟节点会被挤成 0 高，见 `DiscoverListPage` 同处注释）。
+            if (this.items.length === 0 && this.message.length > 0 && !this.message.endsWith('…')) {
               ListItem() {
                 Row({ space: 8 }) {
-                  if (this.message.endsWith('…')) {
-                    LoadingProgress().width(32).height(32)
-                  }
                   Text(this.message)
                     .fontSize(12)
                     .fontColor($r('app.color.text_secondary'))
