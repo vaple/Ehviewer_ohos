@@ -273,11 +273,7 @@ export struct FavoritesPage {
         EhUrl.favorites(site, this.favCat, this.keyword, 0);
       await this.feed.load(firstUrl, refresh);
       this.items = this.feed.items;
-      // 空态必须区分「搜不到」与「还没有收藏」：搜索 0 条时提示「还没有云收藏」会让用户
-      // 以为整个收藏夹空了（他的 48 条还在，只是这个关键词没有命中）。
-      this.message = this.items.length === 0
-        ? (this.keyword.length > 0 ? '没有找到匹配的收藏' : '还没有云收藏')
-        : '';
+      this.message = this.items.length === 0 ? '还没有云收藏' : '';
       this.dataSource.setItems(this.items, this.feed.hasMore);
       // 缩略图不在这里批量补：翻页新来的条目也会自己取（行 `onAppear` 时取一次）。
       // 原来的一次性 `loadMissingThumbs` 只覆盖「本次 load 拿到的这一页」，而且失败是静默的——
@@ -309,15 +305,6 @@ export struct FavoritesPage {
     this.searchController.stopEditing();
     this.scroller.scrollToIndex(0);
     // 骨架行由 `load(true)` 里的 `reloading` 负责，这里不再手工设 `firstLoad`。
-    this.load(true);
-  }
-
-  /** 空态里的「清空搜索」：关键词与草稿一起清掉，回到完整收藏列表。 */
-  private clearSearch(): void {
-    this.keyword = '';
-    this.draft = '';
-    this.searchController.stopEditing();
-    this.scroller.scrollToIndex(0);
     this.load(true);
   }
 
@@ -791,8 +778,6 @@ export struct FavoritesPage {
           .onClick(() => {
             if (this.notLoggedIn()) {
               this.pageStack?.pushPathByName('设置', undefined);
-            } else if (this.searching()) {
-              this.clearSearch();
             } else {
               this.load(true);
             }
@@ -807,17 +792,9 @@ export struct FavoritesPage {
     return this.message === '登录后查看云收藏';
   }
 
-  /** 收藏内搜索是否有生效关键词：空态文案/图标/动作都要按它分流。 */
-  private searching(): boolean {
-    return this.keyword.length > 0;
-  }
-
   private stateIcon(): Resource {
     if (this.notLoggedIn()) {
       return $r('sys.symbol.person');
-    }
-    if (this.searching()) {
-      return $r('sys.symbol.magnifyingglass');
     }
     if (this.message === '还没有云收藏') {
       return $r('sys.symbol.heart');
@@ -829,9 +806,6 @@ export struct FavoritesPage {
     if (this.notLoggedIn()) {
       return '用 Web 登录或手动填入 Cookie 后即可查看云端收藏。';
     }
-    if (this.searching()) {
-      return '换个关键词试试，或清空搜索查看全部收藏。';
-    }
     if (this.message === '还没有云收藏') {
       return '在画廊详情页点心形按钮，收藏会出现在这里。';
     }
@@ -842,9 +816,6 @@ export struct FavoritesPage {
   private stateAction(): string {
     if (this.notLoggedIn()) {
       return '去登录';
-    }
-    if (this.searching()) {
-      return '清空搜索';
     }
     if (this.message === '还没有云收藏') {
       return '';
