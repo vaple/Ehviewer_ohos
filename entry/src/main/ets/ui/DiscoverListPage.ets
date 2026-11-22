@@ -199,7 +199,8 @@ export struct DiscoverListPage {
           .cachedCount(4)
           // 预取：滚到尾部窗口就问一次（`getData` 不再有副作用，见 `ui/AGENTS.md` #66）。
           .onScrollIndex((_start: number, end: number) => {
-            if (shouldFetchMore(this.items.length, end + PREFETCH_TAIL, this.feed.hasMore, this.isLoading)) {
+            if (this.items.length > 0
+                  && shouldFetchMore(this.items.length, end + PREFETCH_TAIL, this.feed.hasMore, this.isLoading)) {
               this.load(false);
             }
           })

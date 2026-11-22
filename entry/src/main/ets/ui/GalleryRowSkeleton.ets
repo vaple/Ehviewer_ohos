@@ -2,12 +2,15 @@ import { CARD_RADIUS, THUMB_RADIUS } from './Materials';
 import { SkeletonBlock } from './Skeleton';
 
 /**
- * 首屏骨架行下标（一屏大约能看到的行数；再多也看不见，少建几个省首帧）。
+ * 首屏骨架行下标。
  *
- * 为什么不写 `Repeat(5)`：`Repeat` 对「数字种子」的语义是**重复次数**，`each` 里拿不到序号；
- * 给显式数组才能稳定生成 `sk-0…sk-4` 这批 key（与真行的 `${gid}` key 不冲突）。
+ * 数量按真机最长的一屏算：行高 383px（113.5vp），2848px 高的屏幕能放 7.4 行 → 取 8 条铺满。
+ * 少给会在底部留一截空白（用户实测指出）；多给的部分只是超出屏幕、可滚动，没有副作用。
+ *
+ * 为什么不写 `Repeat(8)`：`Repeat` 对「数字种子」的语义是**重复次数**，`each` 里拿不到序号；
+ * 给显式数组才能稳定生成 `sk-0…sk-7` 这批 key（与真行的 `${gid}` key 不冲突）。
  */
-export const SKELETON_ROW_INDICES: number[] = [0, 1, 2, 3, 4];
+export const SKELETON_ROW_INDICES: number[] = [0, 1, 2, 3, 4, 5, 6, 7];
 
 /**
  * 列表首屏骨架行（六个列表共用：首页 / 搜索 / 历史 / 排行 / 订阅 / 收藏）。

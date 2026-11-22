@@ -240,14 +240,16 @@ export struct FavoritesPage {
       return;
     }
     this.isLoading = true;
-    // 三种请求各有各的指示器（`ui/AGENTS.md` #90）：
-    // - 下拉刷新：`RefreshSpinner` 只叠一个圈，**保留旧列表** → 什么都不设；
-    // - 第一页重建（初始 / 切分类 / 切排序 / 搜索）：骨架行；
+    // 指示器分工（`ui/AGENTS.md` #90 / #95）：
+    // - 第一页（初始 / 切分类 / 切排序 / 搜索 / 下拉刷新）：骨架行；
     // - 下一页（滚到底）：列表底部一行「加载中…」。
-    if (refresh && !this.isRefreshing) {
-      this.reloading = true;
-    } else if (!refresh) {
+    // **空列表一律按第一页处理**：空列表时若误触发翻页，`loadingMore` 会让底部提示与空态
+    // 同时被排除，整片空白（真机断网实测，`ui/AGENTS.md` #95）。
+    const firstPage: boolean = refresh || this.items.length === 0;
+    if (!firstPage) {
       this.loadingMore = true;
+    } else if (!this.isRefreshing || this.items.length === 0) {
+      this.reloading = true;
     }
     try {
       const site: EhSite = this.settings.site;
@@ -273,7 +275,11 @@ export struct FavoritesPage {
         EhUrl.favorites(site, this.favCat, this.keyword, 0);
       await this.feed.load(firstUrl, refresh);
       this.items = this.feed.items;
-      this.message = this.items.length === 0 ? '还没有云收藏' : '';
+      // 空态必须区分「搜不到」与「还没有收藏」：搜索 0 条时提示「还没有云收藏」会让用户
+      // 以为整个收藏夹空了（他的 48 条还在，只是这个关键词没有命中）。
+      this.message = this.items.length === 0
+        ? (this.keyword.length > 0 ? '没有找到匹配的收藏' : '还没有云收藏')
+        : '';
       this.dataSource.setItems(this.items, this.feed.hasMore);
       // 缩略图不在这里批量补：翻页新来的条目也会自己取（行 `onAppear` 时取一次）。
       // 原来的一次性 `loadMissingThumbs` 只覆盖「本次 load 拿到的这一页」，而且失败是静默的——
@@ -305,6 +311,15 @@ export struct FavoritesPage {
     this.searchController.stopEditing();
     this.scroller.scrollToIndex(0);
     // 骨架行由 `load(true)` 里的 `reloading` 负责，这里不再手工设 `firstLoad`。
+    this.load(true);
+  }
+
+  /** 空态里的「清空搜索」：关键词与草稿一起清掉，回到完整收藏列表。 */
+  private clearSearch(): void {
+    this.keyword = '';
+    this.draft = '';
+    this.searchController.stopEditing();
+    this.scroller.scrollToIndex(0);
     this.load(true);
   }
 
@@ -778,6 +793,8 @@ export struct FavoritesPage {
           .onClick(() => {
             if (this.notLoggedIn()) {
               this.pageStack?.pushPathByName('设置', undefined);
+            } else if (this.searching()) {
+              this.clearSearch();
             } else {
               this.load(true);
             }
@@ -792,9 +809,17 @@ export struct FavoritesPage {
     return this.message === '登录后查看云收藏';
   }
 
+  /** 收藏内搜索是否有生效关键词：空态文案/图标/动作都要按它分流。 */
+  private searching(): boolean {
+    return this.keyword.length > 0;
+  }
+
   private stateIcon(): Resource {
     if (this.notLoggedIn()) {
       return $r('sys.symbol.person');
+    }
+    if (this.searching()) {
+      return $r('sys.symbol.magnifyingglass');
     }
     if (this.message === '还没有云收藏') {
       return $r('sys.symbol.heart');
@@ -806,6 +831,9 @@ export struct FavoritesPage {
     if (this.notLoggedIn()) {
       return '用 Web 登录或手动填入 Cookie 后即可查看云端收藏。';
     }
+    if (this.searching()) {
+      return '换个关键词试试，或清空搜索查看全部收藏。';
+    }
     if (this.message === '还没有云收藏') {
       return '在画廊详情页点心形按钮，收藏会出现在这里。';
     }
@@ -816,6 +844,9 @@ export struct FavoritesPage {
   private stateAction(): string {
     if (this.notLoggedIn()) {
       return '去登录';
+    }
+    if (this.searching()) {
+      return '清空搜索';
     }
     if (this.message === '还没有云收藏') {
       return '';
@@ -953,7 +984,8 @@ export struct FavoritesPage {
                     .swipeAction({ end: this.rowSwipe(item) })
                   }, (item: GalleryRowItem) => `${item.gid}`)
                   // 下一页在飞：列表底部一行提示（标准 load-more 形态）。
-                  if (this.loadingMore) {
+                  // **仅在有内容时显示**：列表为空时这一行会顶到最上面，和空态/错误块重复（#95）。
+                  if (this.loadingMore && this.items.length > 0) {
                     ListItem() {
                       Row({ space: 8 }) {
                         LoadingProgress()
@@ -970,7 +1002,10 @@ export struct FavoritesPage {
                     }
                   }
                   // 空态 / 错误：作为 ListItem 放在 List 里（放外面会被 `layoutWeight` 挤成半屏）。
-                  if (!this.firstLoad && this.items.length === 0 && this.message.length > 0) {
+                  // **必须排除"请求进行中"**：`reloading` / `loadingMore` 期间不渲染空态，
+                  // 否则会和骨架行或底部提示重复（`ui/AGENTS.md` #95）。
+                  if (!this.reloading && !this.loadingMore && !this.firstLoad
+                    && this.items.length === 0 && this.message.length > 0) {
                     ListItem() {
                       this.stateView()
                     }
@@ -987,8 +1022,11 @@ export struct FavoritesPage {
               .height('100%')
               .cachedCount(4)
               // 预取：滚到尾部窗口就问一次（`getData` 不再有副作用）。
+              // **列表为空时不翻页**：空列表也会产生滚动回调，翻页会把状态带进
+              // 「loadingMore 但无内容」的死角（断网时还每 5 秒重试一次，`ui/AGENTS.md` #95）。
               .onScrollIndex((_start: number, end: number) => {
-                if (shouldFetchMore(this.items.length, end + PREFETCH_TAIL, this.feed.hasMore, this.isLoading)) {
+                if (this.items.length > 0
+                  && shouldFetchMore(this.items.length, end + PREFETCH_TAIL, this.feed.hasMore, this.isLoading)) {
                   this.load(false);
                 }
               })
